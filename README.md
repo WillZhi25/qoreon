@@ -1,81 +1,108 @@
 # Qore
 
-Qore 是连接人类意图与 AI 执行的核心系统。
+![Qore Banner](assets/brand/qore-banner.svg)
 
-它让多个 AI Agent 可以被组织、协同和持续优化。
-你不再直接用 AI，而是管理一个 AI 团队。
+Qore is the core system between human intent and AI execution.
 
-本地运行，接入 Claude Code、Codex 等工具，提供统一的协同与控制层。
+Organize, coordinate, and continuously improve an AI team.
+You no longer use one AI directly. You manage an AI team.
 
-当前这份公开仓候选提供三类能力：
+Run locally, connect Codex, Claude Code and other CLI agents, and add one unified coordination and control layer on top.
 
-- 把目录里的任务/反馈/沉淀 Markdown 扫描成可视化看板。
-- 通过同源本机 API 驱动 Codex、Claude、Gemini、OpenCode、Trae 等 CLI 会话。
-- 交付一个可复制的最小示例项目，包含通道、Agent、任务种子、技能包和 AI 初始化说明。
+## Why Qore
 
-## 当前首发范围
+Most AI tooling stops at "one prompt, one answer". Qore is built for a different operating model:
 
-- 核心代码主链路：`task_dashboard/`、`server.py`、`build_project_task_dashboard.py`
-- 页面：任务页、总览页、通讯页、状态页、Agent 目录页、Agent 幕帘页、关系页、会话健康页
-- 示例项目：`examples/minimal-project/`
-- 初始化资料：`docs/public/`、`examples/minimal-project/seed/`、`examples/minimal-project/skills/`
+- Turn markdown task spaces into a visible control board.
+- Coordinate multiple AI agents around channels, tasks, feedback, and sediment.
+- Keep execution local-first and controllable.
+- Ship a reusable example project, seed packs, and AI bootstrap instructions together.
 
-## 快速开始
+## What Ships In V1
 
-1. 使用 Python 3.11+。
-2. 如需自定义配置，先复制一份：
+- Core pipeline: `task_dashboard/`, `server.py`, `build_project_task_dashboard.py`
+- Pages: task, overview, communication audit, status report, agent directory, agent curtain, relationship board, session health
+- Example workspace: `examples/minimal-project/`
+- Public bootstrap kit: `docs/public/`, `examples/minimal-project/seed/`, `examples/minimal-project/skills/`
+- Local demo runtime on `127.0.0.1:18770`
+
+## Quick Start
+
+1. Use Python `3.11+`
+2. Copy config if needed:
 
 ```bash
 cp config.example.toml config.toml
 ```
 
-3. 生成静态页面：
+3. Build static pages:
 
 ```bash
 python3 build_project_task_dashboard.py
 ```
 
-4. 启动本机服务：
+4. Start the local service:
 
 ```bash
 python3 server.py --port 18770
 ```
 
-5. 打开页面：
+5. Open:
 
 - `http://127.0.0.1:18770/project-task-dashboard.html`
 - `http://127.0.0.1:18770/project-overview-dashboard.html`
+- `http://127.0.0.1:18770/project-status-report.html`
 - `http://127.0.0.1:18770/__health`
 
-## 建议阅读顺序
+## Read In This Order
 
 - `docs/public/quick-start.md`
 - `docs/public/ai-bootstrap.md`
+- `docs/public/github-homepage-kit.md`
+- `docs/public/brand/logo-direction.md`
+- `docs/public/launch/first-wave.md`
 - `examples/minimal-project/README.md`
 - `examples/minimal-project/seed/seed-inventory.json`
 
-## 目录说明
+## Repo Structure
 
-- `task_dashboard/`: Python 构建引擎与运行时
-- `web/`: 前端模板与脚本
-- `examples/minimal-project/`: 公开示例项目
-- `docs/public/`: 外部使用文档
-- `docs/status-report/`: 状态汇报页数据源
-- `tests/`: 最小公开测试集
+- `task_dashboard/`: Python build engine and runtime
+- `web/`: page templates and browser scripts
+- `examples/minimal-project/`: public example project
+- `assets/brand/`: brand draft assets for GitHub and launch
+- `docs/public/`: public-facing docs and launch material
+- `docs/status-report/`: status report source
+- `tests/`: minimal public test suite
 
-## 设计边界
+## Product Positioning
 
-- 默认只监听 `127.0.0.1`
-- 默认不包含任何真实会话、真实 run、真实任务空间
-- Qore 公开版只内置公开安全的种子包与技能包
-- Git 桥接能力默认是 `read_only / dry_run`
+Qore is not just a dashboard and not just an agent runner.
 
-## 测试
+It is:
+
+- a local control layer for multi-agent execution
+- a collaboration model built around channels and task spaces
+- a bootstrap pack that helps another AI continue the work correctly
+
+It is not:
+
+- a hosted SaaS in this repository
+- a remote cloud orchestrator by default
+- a production data sync tool out of the box
+
+## Design Boundaries
+
+- default bind is `127.0.0.1`
+- no real sessions, real runs, or internal task spaces are bundled
+- only public-safe seed packs and skills are included
+- Git bridge capability defaults to `read_only / dry_run`
+
+## Validation
 
 ```bash
 python3 -m unittest discover -s tests -p 'test_*.py' -v
 ```
 
-## 许可
+## License
 
-MIT，见 `LICENSE`。
+MIT. See `LICENSE`.

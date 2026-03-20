@@ -1,0 +1,20 @@
+<svg width="1200" height="320" viewBox="0 0 1200 320" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1200" height="320" rx="36" fill="#0B1219"/>
+  <rect x="24" y="24" width="1152" height="272" rx="28" fill="url(#bg)"/>
+  <g>
+    <rect x="72" y="72" width="176" height="176" rx="44" fill="#0F1720"/>
+    <circle cx="160" cy="160" r="52" stroke="#14B8A6" stroke-width="18"/>
+    <path d="M193 193L228 228" stroke="#14B8A6" stroke-width="18" stroke-linecap="round"/>
+    <circle cx="160" cy="160" r="14" fill="#F4EFE6"/>
+    <circle cx="205" cy="115" r="9" fill="#F2B84B"/>
+  </g>
+  <text x="292" y="138" fill="#F7F4EE" font-size="82" font-family="Avenir Next, Inter, Segoe UI, sans-serif" font-weight="700">Qore</text>
+  <text x="292" y="182" fill="#9FECDF" font-size="24" font-family="Avenir Next, Inter, Segoe UI, sans-serif">The core system between human intent and AI execution</text>
+  <text x="292" y="222" fill="#D9D4CB" font-size="22" font-family="Avenir Next, Inter, Segoe UI, sans-serif">Organize, coordinate, and improve an AI team locally.</text>
+  <defs>
+    <linearGradient id="bg" x1="24" y1="24" x2="1176" y2="296" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#101922"/>
+      <stop offset="1" stop-color="#122922"/>
+    </linearGradient>
+  </defs>
+</svg>
