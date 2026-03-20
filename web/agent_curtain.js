@@ -1774,6 +1774,7 @@
     const params = new URLSearchParams();
     params.set("projectId", safeText(projectId));
     params.set("limit", String(currentRunLimit()));
+    params.set("payloadMode", "light");
     if (STATE.windowKey === "custom") {
       const startMs = Number(STATE.customRange.startMs) || 0;
       const endMs = Number(STATE.customRange.endMs) || 0;

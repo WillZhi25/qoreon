@@ -711,6 +711,7 @@
     const params = new URLSearchParams();
     params.set("projectId", safeText(STATE.projectId));
     params.set("limit", "240");
+    params.set("payloadMode", "light");
     if (STATE.windowKey === "custom") {
       if (STATE.customRange.startMs) params.set("afterCreatedAt", new Date(STATE.customRange.startMs).toISOString());
       if (STATE.customRange.endMs) params.set("beforeCreatedAt", new Date(STATE.customRange.endMs).toISOString());

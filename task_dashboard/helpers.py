@@ -18,6 +18,12 @@ from pathlib import Path
 from typing import Any
 
 
+UUID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+OPENCODE_SESSION_RE = re.compile(r"^ses_[A-Za-z0-9]{8,128}$")
+
+
 def safe_text(s: Any, max_len: int) -> str:
     s2 = "" if s is None else str(s)
     if len(s2) > max_len:
@@ -111,10 +117,17 @@ def iso_after_s(delay_s: float) -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(time.time() + ts))
 
 
+def looks_like_session_id(s: str) -> bool:
+    text = str(s or "").strip()
+    if not text:
+        return False
+    return bool(UUID_RE.match(text) or OPENCODE_SESSION_RE.match(text))
+
+
 def looks_like_uuid(s: str) -> bool:
-    return bool(
-        re.match(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", s.strip())
-    )
+    # Backward-compatible name: session IDs are no longer UUID-only after OpenCode
+    # adopted native `ses_...` identifiers.
+    return looks_like_session_id(s)
 
 
 def atomic_write_text(path: Path, content: str) -> None:
@@ -162,9 +175,24 @@ def _repo_root() -> Path:
     """
     Resolve the repository root path.
 
-    Uses TASK_DASHBOARD_REPO_ROOT when present, otherwise discovers the nearest
-    repository/package root by walking upward from this module.
+    Uses the TASK_DASHBOARD_REPO_ROOT environment variable if set and valid,
+    otherwise computes based on the module location (4 levels up from this file).
+
+    Prefers Desktop/xiaomishu as canonical root when it resolves to the same
+    physical directory, to keep path presentation stable across symlinked workspaces.
     """
+
+    def _prefer_desktop_alias(p: Path) -> Path:
+        # Prefer Desktop/xiaomishu as canonical root text when it points to the same
+        # physical directory as the computed root.
+        try:
+            desk = Path.home() / "Desktop" / "xiaomishu"
+            if desk.exists() and desk.is_dir():
+                if desk.resolve() == p.resolve():
+                    return desk
+        except Exception:
+            pass
+        return p
 
     # Allow explicit root override to keep path presentation stable across symlinked
     # workspaces (e.g. Desktop alias vs workspace physical path).
@@ -174,15 +202,9 @@ def _repo_root() -> Path:
         if not p.is_absolute():
             p = (Path(__file__).absolute().parent / p)
         if p.exists() and p.is_dir():
-            return p
-    here = Path(__file__).absolute()
-    for parent in [here.parent] + list(here.parents):
-        if (parent / ".git").exists():
-            return parent
-    for parent in [here.parent] + list(here.parents):
-        if (parent / "task_dashboard").exists() and (parent / "web").exists():
-            return parent
-    return here.parents[1]
+            return _prefer_desktop_alias(p)
+    # Keep logical path when possible; avoid forcing resolve() here.
+    return _prefer_desktop_alias(Path(__file__).absolute().parents[3])
 
 
 def _find_project_cfg(project_id: str) -> dict[str, Any]:
@@ -218,6 +240,7 @@ __all__ = [
     "parse_iso_ts",
     "parse_rfc3339_ts",
     "iso_after_s",
+    "looks_like_session_id",
     "looks_like_uuid",
     "atomic_write_text",
     "coerce_bool",

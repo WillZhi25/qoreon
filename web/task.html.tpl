@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>项目任务看板 · 小秘书</title>
+  <title>项目任务看板 · Qoreon</title>
   <style>__INLINE_CSS__</style>
 </head>
 <body>
@@ -287,7 +287,6 @@
                 <path d="M5.5 6.5a2 2 0 0 1 2-2h3.7c.5 0 1 .2 1.4.6l.8.8c.2.2.4.3.7.3h2.4a2 2 0 0 1 2 2v8.2a2 2 0 0 1-2 2H7.5a2 2 0 0 1-2-2V6.5Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
                 <path d="M8.5 10.2h7M8.5 13.2h5.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
               </svg>
-              <span>会话文件</span>
               <span class="detail-files-count-total" id="detailFilesCountTotal" style="display:none;">0</span>
               <span class="detail-files-count-star" id="detailFilesCountStarWrap" style="display:none;">
                 <span class="detail-files-count-star-icon">★</span>
@@ -299,7 +298,6 @@
                 <path d="M7 4.5h10a2 2 0 0 1 2 2v11l-4-2.4-4 2.4-4-2.4-4 2.4v-11a2 2 0 0 1 2-2h2" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
                 <path d="M9 8h6M9 11h5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
               </svg>
-              <span>对话备忘</span>
               <span class="memo-count-dot memo" id="detailMemoCountDot" style="display:none;">0</span>
             </button>
             <button class="btn icon-text-btn" id="detailTaskPushBtn" title="协作派发" style="display:none;">
@@ -479,7 +477,7 @@
           </div>
           <div style="display:grid; gap:6px;">
             <label for="bindSid">Session ID</label>
-            <input class="input" id="bindSid" placeholder="例如：xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" />
+            <input class="input" id="bindSid" placeholder="例如：019bde9b-4793-70e0-b18a-a437279b2d18 或 ses_abc123..." />
           </div>
           <div class="berr" id="bindErr" style="display:none;"></div>
         </div>
@@ -564,7 +562,7 @@
           </div>
           <div id="newConvSessionRow" style="display:none; gap:6px;">
             <label for="newConvSessionId">Session ID</label>
-            <input class="input" id="newConvSessionId" placeholder="例如：xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" />
+            <input class="input" id="newConvSessionId" placeholder="例如：019bde9b-4793-70e0-b18a-a437279b2d18 或 ses_abc123..." />
             <div class="hint" style="margin-top:0;">输入已有会话 ID，系统会直接绑定到当前项目通道。</div>
           </div>
           <div id="newConvInitRow" style="display:grid; gap:6px;">

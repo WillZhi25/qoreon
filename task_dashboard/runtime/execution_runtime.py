@@ -75,6 +75,9 @@ __all__ = [
 ]
 
 
+_TERMINAL_TEXT_CLIS = {"claude", "opencode"}
+
+
 def __getattr__(name: str):
     import server
 
@@ -525,10 +528,10 @@ def run_cli_exec(
                 lock = threading.Lock()
                 err_buf: list[str] = []
                 live_auth_error: dict[str, str] = {"text": ""}
-                is_claude_terminal = str(cli_type or "").strip().lower() == "claude"
+                is_terminal_text_cli = str(cli_type or "").strip().lower() in _TERMINAL_TEXT_CLIS
                 existing_rows_raw = meta.get("processRows") or meta.get("process_rows") or []
                 existing_rows: list[dict[str, str]] = []
-                if isinstance(existing_rows_raw, list) and not is_claude_terminal:
+                if isinstance(existing_rows_raw, list) and not is_terminal_text_cli:
                     for item in existing_rows_raw[-240:]:
                         if not isinstance(item, dict):
                             continue
@@ -541,14 +544,14 @@ def run_cli_exec(
                                 "at": str(item.get("at") or item.get("timestamp") or item.get("time") or "").strip(),
                             }
                         )
-                if is_claude_terminal:
+                if is_terminal_text_cli:
                     meta["agentMessagesCount"] = 0
                     meta["partialPreview"] = ""
                     meta["processRows"] = []
                     meta["process_rows"] = []
                 process_state: dict[str, Any] = {
-                    "count": 0 if is_claude_terminal else int(meta.get("agentMessagesCount") or 0),
-                    "latest": "" if is_claude_terminal else str(meta.get("partialPreview") or ""),
+                    "count": 0 if is_terminal_text_cli else int(meta.get("agentMessagesCount") or 0),
+                    "latest": "" if is_terminal_text_cli else str(meta.get("partialPreview") or ""),
                     "last_text": str((existing_rows[-1] or {}).get("text") or "") if existing_rows else "",
                     "rows": existing_rows,
                 }
@@ -900,7 +903,7 @@ def run_cli_exec(
         last = extract_terminal_message_from_file(log_path, cli_type=cli_type)
         if last:
             meta["lastPreview"] = _safe_text(last.replace("\r\n", "\n").strip(), 300)
-    if str(cli_type or "").strip().lower() == "claude":
+    if str(cli_type or "").strip().lower() in _TERMINAL_TEXT_CLIS:
         meta["agentMessagesCount"] = 0
         meta["partialPreview"] = ""
         meta["processRows"] = []

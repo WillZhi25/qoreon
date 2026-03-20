@@ -11,6 +11,9 @@ from typing import Any, Optional
 from task_dashboard.adapters import CodexAdapter, get_adapter
 
 
+_TERMINAL_TEXT_CLIS = {"claude", "opencode"}
+
+
 def _safe_text(s: Any, max_len: int) -> str:
     s2 = "" if s is None else str(s)
     if len(s2) > max_len:
@@ -126,7 +129,7 @@ def extract_agent_messages_from_file(path: Path, max_items: int = 12, cli_type: 
 
 def extract_terminal_message_text(log_text: str, *, cli_type: str = "codex") -> str:
     cli = str(cli_type or "").strip().lower()
-    if not log_text or cli != "claude":
+    if not log_text or cli not in _TERMINAL_TEXT_CLIS:
         return ""
     adapter_cls = get_adapter(cli) or CodexAdapter
     out: list[str] = []

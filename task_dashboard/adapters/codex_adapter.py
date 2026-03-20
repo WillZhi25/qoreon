@@ -33,10 +33,6 @@ class CodexAdapter(CLIAdapter):
 
     @classmethod
     def _build_codex_invocation_prefix(cls) -> list[str]:
-        preferred_bin = Path.home() / ".local" / "bin"
-        preferred_codex = preferred_bin / "codex"
-        if preferred_codex.exists():
-            return [str(preferred_codex)]
         return [resolve_cli_executable("codex")]
 
     @classmethod

@@ -4,14 +4,21 @@
   const projects = Array.isArray(DATA.projects) ? DATA.projects : [];
   const COPY_LABEL = Object.create(null);
   const COPY_TIMER = Object.create(null);
+  const FILTERS = ["all", "today-active", "today-inactive", "primary"];
 
   const STATE = {
     projectId: "",
     query: "",
+    activity: "all",
   };
 
   function text(v) {
     return String(v == null ? "" : v).trim();
+  }
+
+  function numberValue(v) {
+    const num = Number(v);
+    return Number.isFinite(num) ? num : 0;
   }
 
   function formatZhDateTime(raw) {
@@ -57,6 +64,13 @@
     };
   }
 
+  function syncHash() {
+    const params = new URLSearchParams();
+    if (STATE.projectId) params.set("p", STATE.projectId);
+    const next = params.toString();
+    history.replaceState(null, "", next ? "#" + next : "#");
+  }
+
   function primaryProjectId() {
     const fromHash = parseHash().projectId;
     if (fromHash && projects.some((p) => text(p.id) === fromHash)) return fromHash;
@@ -95,6 +109,48 @@
     };
   }
 
+  function safeBusinessSummary(project) {
+    const raw = project && project.agent_directory_summary && typeof project.agent_directory_summary === "object"
+      ? project.agent_directory_summary
+      : {};
+    const topChannels = Array.isArray(raw.top_channels) ? raw.top_channels : [];
+    const bySessionIdRaw = raw.by_session_id && typeof raw.by_session_id === "object" ? raw.by_session_id : {};
+    const bySessionId = {};
+    Object.keys(bySessionIdRaw).forEach((key) => {
+      const row = bySessionIdRaw[key] && typeof bySessionIdRaw[key] === "object" ? bySessionIdRaw[key] : {};
+      bySessionId[key] = {
+        today_active: !!row.today_active,
+        today_run_count: numberValue(row.today_run_count),
+        total_run_count: numberValue(row.total_run_count),
+        latest_run_id: text(row.latest_run_id),
+        latest_status: text(row.latest_status).toLowerCase(),
+        latest_created_at: text(row.latest_created_at),
+        latest_channel_name: text(row.latest_channel_name),
+        latest_summary: text(row.latest_summary),
+        latest_conclusion: text(row.latest_conclusion),
+        next_action: text(row.next_action),
+        source_run_id: text(row.source_run_id),
+        summary_source: text(row.summary_source),
+      };
+    });
+    return {
+      today: text(raw.today),
+      generated_at: text(raw.generated_at),
+      runs_root: text(raw.runs_root),
+      today_run_count: numberValue(raw.today_run_count),
+      active_agent_total: numberValue(raw.active_agent_total),
+      active_today_agents: numberValue(raw.active_today_agents),
+      inactive_today_agents: numberValue(raw.inactive_today_agents),
+      top_channels: topChannels
+        .map((row) => ({
+          channel_name: text(row && row.channel_name),
+          run_count: numberValue(row && row.run_count),
+        }))
+        .filter((row) => row.channel_name),
+      bySessionId,
+    };
+  }
+
   function badge(nodeClass, label) {
     return el("span", { class: nodeClass, text: label });
   }
@@ -118,6 +174,10 @@
     return (display || channelName || "协同对象").replace(/\s+/g, "");
   }
 
+  function firstProjectText(project) {
+    return text(project && (project.id || (project.project && project.project.project_id) || project.name || (project.project && project.project.project_name)));
+  }
+
   function buildContactLabel(project, channel, agent) {
     const projectPart = sanitizeMentionLabelSegment(firstProjectText(project));
     const agentPart = sanitizeMentionLabelSegment(mentionBaseLabel(agent, channel));
@@ -131,6 +191,67 @@
 
   function collabIdentityLabel(agent) {
     return agent && agent.is_primary ? "主协作" : "协作";
+  }
+
+  function statusLabel(status) {
+    const value = text(status).toLowerCase();
+    if (value === "running") return "进行中";
+    if (value === "queued") return "排队中";
+    if (value === "done") return "已完成";
+    if (value === "error") return "异常";
+    return value ? value : "未运行";
+  }
+
+  function statusBadgeClass(status) {
+    const value = text(status).toLowerCase();
+    if (value === "running") return "badge status is-running";
+    if (value === "queued") return "badge status is-queued";
+    if (value === "done") return "badge status is-done";
+    if (value === "error") return "badge status is-error";
+    return "badge status";
+  }
+
+  function businessStateLabel(agentStatus, business) {
+    const status = text(agentStatus).toLowerCase();
+    if (status && status !== "active") return status === "inactive" ? "当前未激活" : status;
+    if (business.today_active) return "今日活跃";
+    if (business.total_run_count > 0) return "今日未活跃";
+    return "暂无业务记录";
+  }
+
+  function businessStateClass(agentStatus, business) {
+    const status = text(agentStatus).toLowerCase();
+    if (status && status !== "active") return "badge activity is-muted";
+    if (business.today_active) return "badge activity is-active";
+    if (business.total_run_count > 0) return "badge activity is-history";
+    return "badge activity";
+  }
+
+  function businessSectionTitle(agentStatus, business) {
+    const status = text(agentStatus).toLowerCase();
+    if (status && status !== "active") return "最近留痕";
+    if (business.today_active) return "今日业务摘要";
+    if (business.total_run_count > 0) return "历史业务摘要";
+    return "当前业务状态";
+  }
+
+  function businessSummaryText(agent) {
+    const summary = text(agent.business.latest_summary);
+    const conclusion = text(agent.business.latest_conclusion);
+    const nextAction = text(agent.business.next_action);
+    const desc = text(agent.desc);
+    if (summary) return summary;
+    if (conclusion) return "结论：" + conclusion;
+    if (nextAction) return "下一步：" + nextAction;
+    if (desc) return desc;
+    return "还没有可展示的 run 级业务摘要，当前可先通过联系方式发起协同。";
+  }
+
+  function formatContextSummary(agent) {
+    const parts = [];
+    if (text(agent.target.environment)) parts.push(text(agent.target.environment));
+    if (text(agent.target.branch)) parts.push("分支 " + text(agent.target.branch));
+    return parts.length ? parts.join(" · ") : "未补充上下文";
   }
 
   async function copyTextToClipboard(content) {
@@ -152,7 +273,11 @@
     area.focus();
     area.select();
     let ok = false;
-    try { ok = document.execCommand("copy"); } catch (_) { ok = false; }
+    try {
+      ok = document.execCommand("copy");
+    } catch (_) {
+      ok = false;
+    }
     document.body.removeChild(area);
     return ok;
   }
@@ -169,10 +294,6 @@
         render();
       }, 1500);
     }
-  }
-
-  function firstProjectText(project) {
-    return text(project && (project.id || (project.project && project.project.project_id) || project.name || (project.project && project.project.project_name)));
   }
 
   function buildProjectContext(project) {
@@ -203,7 +324,7 @@
     return { byChannel, bySessionId };
   }
 
-  function buildAgentRecord(project, channel, agent, sessionRow, projectContext) {
+  function buildAgentRecord(project, channel, agent, sessionRow, projectContext, businessSummary) {
     const rawAgent = agent && typeof agent === "object" ? agent : {};
     const rawSession = sessionRow && typeof sessionRow === "object" ? sessionRow : {};
     const executionContext = safeExecutionContext(rawSession.project_execution_context);
@@ -257,12 +378,28 @@
     if ((stateKind === "override" || stateKind === "drift") && executionContext.override.fields.length) {
       contextBadges.push("覆盖 " + executionContext.override.fields.join(" / "));
     }
+    const sessionId = text(rawSession.session_id || rawAgent.session_id);
+    const business = businessSummary.bySessionId[sessionId] || {
+      today_active: false,
+      today_run_count: 0,
+      total_run_count: 0,
+      latest_run_id: "",
+      latest_status: "",
+      latest_created_at: "",
+      latest_channel_name: "",
+      latest_summary: "",
+      latest_conclusion: "",
+      next_action: "",
+      source_run_id: "",
+      summary_source: "",
+    };
     return {
       name: text(rawSession.display_name || rawAgent.display_name || rawSession.alias || rawAgent.desc || rawAgent.session_id) || "未命名 Agent",
+      display_name: text(rawSession.display_name || rawAgent.display_name || rawSession.alias || rawAgent.desc || rawAgent.session_id),
       role: text(channel && channel.channel_role) || "未补角色",
       cli_type: text(rawSession.cli_type || rawAgent.cli_type || channel.primary_cli_type || "codex"),
       desc: text(rawSession.desc || rawAgent.desc),
-      session_id: text(rawSession.session_id || rawAgent.session_id),
+      session_id: sessionId,
       is_primary: !!(rawSession.is_primary || rawAgent.is_primary),
       status: text(rawSession.status || rawAgent.status || "active"),
       session_role: text(rawSession.session_role || rawAgent.session_role || (rawSession.is_primary || rawAgent.is_primary ? "primary" : "child")),
@@ -275,6 +412,7 @@
       context_badges: contextBadges,
       effective_worktree: effectiveWorktree,
       effective_workdir: effectiveWorkdir,
+      business,
     };
   }
 
@@ -285,6 +423,7 @@
     const configChannels = Array.isArray(project && project.channels) ? project.channels : [];
     const projectContext = buildProjectContext(project);
     const sessionMaps = buildSessionMaps(project);
+    const businessSummary = safeBusinessSummary(project);
     const channelsByName = new Map();
     registryChannels.forEach((channel) => {
       const name = text(channel.channel_name);
@@ -342,9 +481,15 @@
         const sessionRow = sessionId && sessionMaps.bySessionId.has(sessionId)
           ? sessionMaps.bySessionId.get(sessionId)
           : sessionRows.find((row) => text(row.session_id) === sessionId) || null;
-        return buildAgentRecord(project, channel, agent, sessionRow, projectContext);
+        return buildAgentRecord(project, channel, agent, sessionRow, projectContext, businessSummary);
       });
-      agents.sort((a, b) => Number(!!b.is_primary) - Number(!!a.is_primary));
+      agents.sort((a, b) => {
+        const primaryDelta = Number(!!b.is_primary) - Number(!!a.is_primary);
+        if (primaryDelta) return primaryDelta;
+        const runDelta = numberValue(b.business.today_run_count) - numberValue(a.business.today_run_count);
+        if (runDelta) return runDelta;
+        return text(a.name).localeCompare(text(b.name), "zh-Hans-CN");
+      });
       return {
         channel_name: channelName,
         channel_desc: text(channel.channel_desc || channel.desc),
@@ -355,52 +500,80 @@
         startup_ready: !!channel.startup_ready,
         session_candidates_count: Number(channel.session_candidates_count || agents.length || 0),
         agents,
+        active_today_count: agents.filter((item) => item.business.today_active).length,
+        today_run_count: agents.reduce((sum, item) => sum + numberValue(item.business.today_run_count), 0),
       };
     });
   }
 
-  function filterChannels(channels, query) {
+  function collectAgents(channels) {
+    return channels.reduce((list, channel) => list.concat(channel.agents || []), []);
+  }
+
+  function matchesActivity(agent) {
+    if (STATE.activity === "today-active") return !!(agent && agent.business && agent.business.today_active);
+    if (STATE.activity === "today-inactive") return text(agent && agent.status).toLowerCase() === "active" && !(agent && agent.business && agent.business.today_active);
+    if (STATE.activity === "primary") return !!(agent && agent.is_primary);
+    return true;
+  }
+
+  function matchesQuery(channel, agent, query) {
     const q = text(query).toLowerCase();
-    if (!q) return channels;
+    if (!q) return true;
+    const channelMatched = [
+      channel.channel_name,
+      channel.channel_desc,
+      channel.channel_role,
+      channel.primary_session_alias,
+    ].some((value) => text(value).toLowerCase().includes(q));
+    if (channelMatched) return true;
+    return [
+      agent.name,
+      agent.desc,
+      agent.session_id,
+      agent.cli_type,
+      agent.state_label,
+      agent.target.environment,
+      agent.target.branch,
+      agent.effective_worktree,
+      agent.business.latest_summary,
+      agent.business.latest_conclusion,
+      agent.business.next_action,
+      businessStateLabel(agent.status, agent.business),
+      statusLabel(agent.business.latest_status),
+    ].some((value) => text(value).toLowerCase().includes(q));
+  }
+
+  function filterChannels(channels) {
     return channels
       .map((channel) => {
-        const selfMatched = [
-          channel.channel_name,
-          channel.channel_desc,
-          channel.channel_role,
-          channel.primary_session_alias,
-        ].some((value) => text(value).toLowerCase().includes(q));
-        const agents = channel.agents.filter((agent) => [
-          agent.name,
-          agent.desc,
-          agent.session_id,
-          agent.cli_type,
-          agent.state_label,
-          agent.target.environment,
-          agent.target.branch,
-          agent.effective_worktree,
-        ].some((value) => text(value).toLowerCase().includes(q)));
-        if (selfMatched) return channel;
+        const agents = channel.agents.filter((agent) => matchesActivity(agent) && matchesQuery(channel, agent, STATE.query));
         if (!agents.length) return null;
-        return { ...channel, agents };
+        return {
+          ...channel,
+          agents,
+          active_today_count: agents.filter((item) => item.business.today_active).length,
+          today_run_count: agents.reduce((sum, item) => sum + numberValue(item.business.today_run_count), 0),
+        };
       })
       .filter(Boolean);
   }
 
-  function updateHeader(project, channels) {
+  function updateHeader(project) {
     const title = document.getElementById("pageTitle");
     const subtitle = document.getElementById("pageSubtitle");
     const back = document.getElementById("backToTaskPage");
+    const summary = safeBusinessSummary(project);
     const projectName = text(project && project.name) || firstProjectText(project) || "项目通讯录";
-    if (title) title.textContent = projectName + " · 通讯录";
-    const generatedAt = text(project && project.registry && project.registry.generated_at) || text(DATA.generated_at);
+    if (title) title.textContent = projectName + " · Agent 联系名单";
+    const generatedAt = text(project && project.registry && project.registry.generated_at) || text(summary.generated_at) || text(DATA.generated_at);
     if (subtitle) {
       subtitle.textContent = generatedAt
-        ? `当前项目 ${projectName}，默认只展示项目 / 通道 / Agent / 主协作身份；联系方式可直接复制到输入框使用。最近同步：${formatZhDateTime(generatedAt)}`
-        : `当前项目 ${projectName}，默认只展示项目 / 通道 / Agent / 主协作身份；联系方式可直接复制到输入框使用。`;
+        ? `当前项目 ${projectName}，把联系方式、今日业务近况和活跃状态合并展示。数据基于通讯录真源与 run 留痕，最近同步：${formatZhDateTime(generatedAt)}。`
+        : `当前项目 ${projectName}，把联系方式、今日业务近况和活跃状态合并展示。数据基于通讯录真源与 run 留痕。`;
     }
     if (back && project) back.href = String(TASK_PAGE || "project-task-dashboard.html") + "#p=" + encodeURIComponent(text(project.id));
-    document.title = projectName + " · 通讯录";
+    document.title = projectName + " · Agent 联系名单";
   }
 
   function renderProjectList() {
@@ -409,14 +582,15 @@
     list.innerHTML = "";
     projects.forEach((project) => {
       const channels = normalizeChannels(project);
-      const agents = channels.reduce((sum, item) => sum + item.agents.length, 0);
+      const agents = collectAgents(channels);
+      const summary = safeBusinessSummary(project);
       const item = el("button", {
         class: "project-item" + (text(project.id) === text(STATE.projectId) ? " active" : ""),
         type: "button",
         dataset: { projectId: text(project.id) },
       }, [
         el("div", { class: "project-item-title", text: text(project.name) || firstProjectText(project) }),
-        el("div", { class: "project-item-meta", text: `项目ID ${firstProjectText(project)} · 通道 ${channels.length} · Agent ${agents}` }),
+        el("div", { class: "project-item-meta", text: `通道 ${channels.length} · Agent ${agents.length} · 今日活跃 ${summary.active_today_agents || 0}` }),
       ]);
       item.addEventListener("click", () => {
         STATE.projectId = text(project.id);
@@ -427,27 +601,65 @@
     });
   }
 
-  function renderSummary(project, channels) {
+  function renderSummary(project, allChannels) {
     const bar = document.getElementById("summaryBar");
     if (!bar) return;
-    const totalAgents = channels.reduce((sum, item) => sum + item.agents.length, 0);
-    const primaryAgents = channels.reduce((sum, item) => {
-      return sum + item.agents.filter((agent) => agent && agent.is_primary).length;
-    }, 0);
+    const summary = safeBusinessSummary(project);
+    const allAgents = collectAgents(allChannels);
+    const primaryAgents = allAgents.filter((agent) => agent && agent.is_primary).length;
+    const topChannel = summary.top_channels[0];
     const cards = [
-      ["当前项目", text(project && project.name) || firstProjectText(project) || "-"],
-      ["通道数", String(channels.length)],
-      ["Agent 数", String(totalAgents)],
-      ["主协作数", String(primaryAgents)],
+      ["当前项目", text(project && project.name) || firstProjectText(project) || "-", true],
+      ["总 Agent", String(allAgents.length)],
+      ["今日活跃", String(summary.active_today_agents || allAgents.filter((agent) => agent.business.today_active).length)],
+      ["今日 Run", String(summary.today_run_count || 0)],
+      ["主协作", String(primaryAgents)],
+      ["最忙通道", topChannel ? `${topChannel.channel_name} · ${topChannel.run_count}` : "-"],
     ];
     bar.innerHTML = "";
-    cards.forEach(([label, value]) => {
-      const valueClass = label === "当前项目" ? "summary-value is-project" : "summary-value";
+    cards.forEach(([label, value, isProject]) => {
       bar.appendChild(el("div", { class: "summary-card" }, [
         el("div", { class: "summary-label", text: label }),
-        el("div", { class: valueClass, text: value }),
+        el("div", { class: isProject ? "summary-value is-project" : "summary-value", text: value }),
       ]));
     });
+  }
+
+  function renderFilters(project, allChannels) {
+    const filterBar = document.getElementById("filterBar");
+    const toolbarNote = document.getElementById("toolbarNote");
+    if (!filterBar || !toolbarNote) return;
+    const summary = safeBusinessSummary(project);
+    const allAgents = collectAgents(allChannels);
+    const counts = {
+      all: allAgents.length,
+      "today-active": allAgents.filter((agent) => agent.business.today_active).length,
+      "today-inactive": allAgents.filter((agent) => text(agent.status).toLowerCase() === "active" && !agent.business.today_active).length,
+      primary: allAgents.filter((agent) => agent.is_primary).length,
+    };
+    const labels = {
+      all: "全部",
+      "today-active": "今日活跃",
+      "today-inactive": "今日未活跃",
+      primary: "主协作",
+    };
+    filterBar.innerHTML = "";
+    FILTERS.forEach((key) => {
+      const button = el("button", {
+        class: "filter-btn" + (STATE.activity === key ? " active" : ""),
+        type: "button",
+        text: `${labels[key]} ${counts[key] || 0}`,
+      });
+      button.addEventListener("click", () => {
+        STATE.activity = key;
+        render();
+      });
+      filterBar.appendChild(button);
+    });
+    const topChannels = summary.top_channels.slice(0, 3).map((row) => `${row.channel_name} ${row.run_count}`).join(" · ");
+    toolbarNote.textContent = topChannels
+      ? `${summary.today || "今日"} 主线通道：${topChannels}`
+      : `${summary.today || "今日"} 暂无 run 级活跃数据，当前页面仅展示通讯录与历史业务摘要。`;
   }
 
   function renderChannels(project, channels) {
@@ -460,14 +672,19 @@
       return;
     }
     empty.hidden = true;
-    const projectName = text(project && project.name) || firstProjectText(project) || "-";
     channels.forEach((channel) => {
       const card = el("article", { class: "channel-card" });
+      const headMetaParts = [];
+      if (channel.channel_desc) headMetaParts.push(channel.channel_desc);
+      headMetaParts.push(`Agent ${channel.agents.length}`);
+      headMetaParts.push(`今日活跃 ${channel.active_today_count}`);
+      headMetaParts.push(`今日 run ${channel.today_run_count}`);
       const head = el("div", { class: "channel-head" }, [
         el("div", {}, [
           el("h2", { class: "channel-title", text: channel.channel_name }),
+          el("div", { class: "channel-meta", text: headMetaParts.join(" · ") }),
         ]),
-        el("div", { class: "channel-count", text: `${channel.agents.length} 个 Agent` }),
+        el("div", { class: "channel-count", text: channel.channel_role || "未补角色" }),
       ]);
       const agentList = el("div", { class: "agent-list" });
       channel.agents.forEach((agent) => {
@@ -485,26 +702,65 @@
           setCopyState(copyKey, ok ? "已复制" : "复制失败");
           render();
         });
+        const chipRow = el("div", { class: "agent-chip-row" });
+        chipRow.appendChild(badge("badge role" + (agent.is_primary ? " primary" : " secondary"), collabIdentityLabel(agent)));
+        chipRow.appendChild(badge(businessStateClass(agent.status, agent.business), businessStateLabel(agent.status, agent.business)));
+        chipRow.appendChild(badge(statusBadgeClass(agent.business.latest_status), statusLabel(agent.business.latest_status)));
+        if (agent.state_label) chipRow.appendChild(badge("badge state", agent.state_label));
+        const metrics = el("div", { class: "agent-metrics" });
+        [
+          `CLI ${agent.cli_type || "-"}`,
+          `Session ${shortSessionId(agent.session_id)}`,
+          `今日 ${numberValue(agent.business.today_run_count)}`,
+          `最近 ${formatZhDateTime(agent.business.latest_created_at)}`,
+        ].forEach((label) => {
+          metrics.appendChild(el("span", { class: "metric-pill", text: label }));
+        });
+        if (agent.business.latest_run_id) {
+          metrics.appendChild(el("span", {
+            class: "metric-pill strong",
+            text: `run ${shortSessionId(agent.business.latest_run_id)}`,
+            title: agent.business.latest_run_id,
+          }));
+        }
+        const contextRow = el("div", { class: "agent-context-row" });
+        (agent.context_badges.length ? agent.context_badges : [formatContextSummary(agent)]).forEach((label) => {
+          contextRow.appendChild(el("span", { class: "context-pill", text: label }));
+        });
+        const fieldList = el("div", { class: "agent-field-list" }, [
+          el("div", { class: "agent-field-row" }, [
+            el("div", { class: "agent-field-label", text: "通道" }),
+            el("div", { class: "agent-field-value", text: channel.channel_name }),
+          ]),
+          el("div", { class: "agent-field-row" }, [
+            el("div", { class: "agent-field-label", text: "会话" }),
+            el("div", { class: "agent-field-value", text: agent.session_id || "未绑定 session" }),
+          ]),
+        ]);
+        if (agent.business.next_action) {
+          fieldList.appendChild(el("div", { class: "agent-field-row" }, [
+            el("div", { class: "agent-field-label", text: "下一步" }),
+            el("div", { class: "agent-field-value", text: agent.business.next_action }),
+          ]));
+        }
         const agentCard = el("div", { class: "agent-card" + (agent.is_primary ? " primary" : "") }, [
           el("div", { class: "agent-main" }, [
             el("div", { class: "agent-name-row" }, [
-              el("div", { class: "agent-name", text: agent.name }),
-              badge("badge role" + (agent.is_primary ? " primary" : " secondary"), collabIdentityLabel(agent)),
+              el("div", { class: "agent-name-block" }, [
+                el("div", { class: "agent-name", text: agent.name }),
+                text(agent.desc) && text(agent.desc) !== text(agent.name)
+                  ? el("div", { class: "agent-desc", text: agent.desc })
+                  : null,
+              ]),
+              chipRow,
             ]),
-            el("div", { class: "agent-field-list" }, [
-              el("div", { class: "agent-field-row" }, [
-                el("div", { class: "agent-field-label", text: "项目" }),
-                el("div", { class: "agent-field-value", text: projectName }),
-              ]),
-              el("div", { class: "agent-field-row" }, [
-                el("div", { class: "agent-field-label", text: "通道" }),
-                el("div", { class: "agent-field-value", text: channel.channel_name }),
-              ]),
-              el("div", { class: "agent-field-row" }, [
-                el("div", { class: "agent-field-label", text: "身份" }),
-                el("div", { class: "agent-field-value", text: collabIdentityLabel(agent) }),
-              ]),
+            metrics,
+            contextRow,
+            el("div", { class: "business-panel" }, [
+              el("div", { class: "business-title", text: businessSectionTitle(agent.status, agent.business) }),
+              el("div", { class: "business-summary", text: businessSummaryText(agent) }),
             ]),
+            fieldList,
             el("div", { class: "agent-contact-row" }, [
               el("div", { class: "agent-contact-label", text: "联系方式" }),
               el("code", { class: "agent-contact-value", text: contactText, title: contactText }),
@@ -522,20 +778,15 @@
     });
   }
 
-  function syncHash() {
-    const params = new URLSearchParams();
-    if (STATE.projectId) params.set("p", STATE.projectId);
-    const next = params.toString();
-    history.replaceState(null, "", next ? "#" + next : "#");
-  }
-
   function render() {
     const project = getProject(STATE.projectId);
-    const channels = filterChannels(normalizeChannels(project), STATE.query);
+    const allChannels = normalizeChannels(project);
+    const visibleChannels = filterChannels(allChannels);
     renderProjectList();
-    updateHeader(project, channels);
-    renderSummary(project, channels);
-    renderChannels(project, channels);
+    updateHeader(project);
+    renderSummary(project, allChannels);
+    renderFilters(project, allChannels);
+    renderChannels(project, visibleChannels);
   }
 
   function bindSearch() {
@@ -548,7 +799,9 @@
   }
 
   function init() {
-    STATE.projectId = primaryProjectId();
+    const hashState = parseHash();
+    STATE.projectId = hashState.projectId || primaryProjectId();
+    if (!FILTERS.includes(STATE.activity)) STATE.activity = "all";
     bindSearch();
     render();
   }

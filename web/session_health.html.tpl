@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Agent 会话上下文健康表 · 小秘书</title>
+  <title>Agent 会话上下文健康表 · Qoreon</title>
   <style>__INLINE_CSS__</style>
 </head>
 <body>
@@ -63,6 +63,7 @@
     </nav>
 
     <section class="notice-panel" id="summaryLine"></section>
+    <section class="capability-panel" id="supportMatrix"></section>
 
     <main class="content">
       <section class="table-panel">

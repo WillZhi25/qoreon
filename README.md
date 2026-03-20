@@ -35,19 +35,25 @@ Most AI tooling stops at "one prompt, one answer". Qoreon is built for a differe
 cp config.example.toml config.toml
 ```
 
-3. Build static pages:
+3. Bootstrap the public example project:
+
+```bash
+python3 scripts/bootstrap_public_example.py
+```
+
+4. Build static pages:
 
 ```bash
 python3 build_project_task_dashboard.py
 ```
 
-4. Start the local service:
+5. Start the local service:
 
 ```bash
 python3 server.py --port 18770
 ```
 
-5. Open:
+6. Open:
 
 - `http://127.0.0.1:18770/project-task-dashboard.html`
 - `http://127.0.0.1:18770/project-overview-dashboard.html`

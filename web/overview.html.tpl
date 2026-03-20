@@ -3,19 +3,19 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>项目总揽 · 小秘书</title>
+  <title>Qoreon · 项目总览</title>
   <style>__INLINE_CSS__</style>
 </head>
 <body>
   <div class="shell">
     <header class="head" id="header">
-      <div class="kicker">OpenClaw Workspace</div>
-      <h1 class="title" id="title">项目总揽</h1>
-      <p class="sub" id="sub">生成时间：—</p>
+      <div class="head-left">
+        <h1 class="title" id="title">Qoreon</h1>
+        <p class="sub" id="sub" hidden></p>
+      </div>
       <div class="head-actions">
-        <span class="env-chip" id="envBadge" hidden></span>
-        <button class="btn btn-ghost" id="statusReportBtn" type="button">情况汇报</button>
-        <button class="btn btn-ghost" id="communicationBtn" type="button">通讯分析</button>
+        <button class="btn btn-primary" id="newProjectBtn" type="button">新增项目</button>
+        <button class="btn btn-ghost" id="worklogBtn" type="button">平台文章</button>
         <button class="btn btn-ghost" id="configBtn" type="button">配置</button>
       </div>
     </header>
@@ -39,7 +39,6 @@
             </div>
           </div>
         </div>
-        <button class="btn btn-ghost" id="viewToggleBtn" type="button">切换视图</button>
         <button class="btn btn-ghost" id="sortBtn" type="button">按优先级</button>
         <button class="btn btn-ghost" id="statsBtn" type="button">隐藏统计</button>
       </div>
@@ -193,7 +192,9 @@
     <section class="cfg-section">
       <h3>CLI 联通</h3>
       <p class="cfg-hint" id="cfgCliSummary">-</p>
+      <p class="cfg-hint" id="cfgCliBinsHint">本机明文配置；留空时自动发现。</p>
       <div class="cfg-cli-list" id="cfgCliList"></div>
+      <button class="btn btn-primary cfg-btn" id="cfgSaveCliBinsBtn" type="button">保存 CLI 路径</button>
     </section>
 
     <section class="cfg-section">
@@ -210,6 +211,119 @@
     </section>
 
     <p class="cfg-message" id="cfgMessage"></p>
+  </aside>
+
+  <div class="cfg-mask worklog-mask" id="worklogMask" hidden></div>
+  <aside class="cfg-drawer worklog-drawer" id="worklogDrawer" aria-hidden="true" aria-label="平台文章">
+    <header class="cfg-head">
+      <div>
+        <h2 class="cfg-title">平台文章</h2>
+      </div>
+      <button class="btn btn-ghost" id="worklogCloseBtn" type="button">关闭</button>
+    </header>
+    <div class="worklog-list" id="worklogList"></div>
+  </aside>
+
+  <div class="cfg-mask project-bootstrap-mask" id="projectBootstrapMask" hidden></div>
+  <aside class="cfg-drawer project-bootstrap-drawer" id="projectBootstrapDrawer" aria-hidden="true" aria-label="新增项目">
+    <header class="cfg-head">
+      <div>
+        <h2 class="cfg-title">新增项目</h2>
+        <p class="cfg-subtitle">首页只负责采集项目基础信息，并展示创建结果。</p>
+      </div>
+      <button class="btn btn-ghost" id="projectBootstrapCloseBtn" type="button">关闭</button>
+    </header>
+
+    <section class="cfg-section">
+      <h3>项目基础</h3>
+      <p class="cfg-hint">以下路径都相对当前 `task-dashboard` 仓库根目录填写。</p>
+      <div class="project-bootstrap-grid">
+        <label class="cfg-field">
+          <span>项目 ID</span>
+          <input class="input" id="projectBootstrapProjectId" type="text" placeholder="demo_project" autocomplete="off" />
+        </label>
+        <label class="cfg-field">
+          <span>项目名称</span>
+          <input class="input" id="projectBootstrapProjectName" type="text" placeholder="演示项目" autocomplete="off" />
+        </label>
+        <label class="cfg-field">
+          <span>项目根目录</span>
+          <input class="input" id="projectBootstrapProjectRoot" type="text" placeholder="projects/demo-project" autocomplete="off" />
+        </label>
+        <label class="cfg-field">
+          <span>任务根目录</span>
+          <input class="input" id="projectBootstrapTaskRoot" type="text" placeholder="projects/demo-project/任务规划" autocomplete="off" />
+        </label>
+        <label class="cfg-field">
+          <span>主题色</span>
+          <input class="input" id="projectBootstrapColor" type="text" placeholder="#0F63F2" autocomplete="off" />
+        </label>
+        <label class="cfg-field">
+          <span>执行权限</span>
+          <select class="input" id="projectBootstrapProfile">
+            <option value="project_privileged_full">project_privileged_full</option>
+            <option value="sandboxed">sandboxed</option>
+          </select>
+        </label>
+        <label class="cfg-field">
+          <span>环境</span>
+          <select class="input" id="projectBootstrapEnvironment">
+            <option value="stable">stable</option>
+            <option value="dev">dev</option>
+          </select>
+        </label>
+      </div>
+      <label class="cfg-field">
+        <span>项目说明（可选）</span>
+        <textarea class="project-bootstrap-textarea" id="projectBootstrapDescription" rows="4" placeholder="说明项目背景、目标或接入边界。"></textarea>
+      </label>
+    </section>
+
+    <section class="cfg-section">
+      <div class="project-bootstrap-toolbar">
+        <div>
+          <h3>通道定义</h3>
+          <p class="cfg-hint">至少保留 1 条通道；仅勾选需要初始化主会话的通道。</p>
+        </div>
+        <button class="btn btn-ghost cfg-btn" id="projectBootstrapAddChannelBtn" type="button">新增通道</button>
+      </div>
+      <div class="project-bootstrap-channel-list" id="projectBootstrapChannelList"></div>
+    </section>
+
+    <section class="cfg-section">
+      <h3>执行选项</h3>
+      <label class="cfg-check">
+        <input id="projectBootstrapCreatePrimarySessions" type="checkbox" checked />
+        自动初始化主会话
+      </label>
+      <label class="cfg-check">
+        <input id="projectBootstrapGenerateRegistry" type="checkbox" checked />
+        生成通讯录与目录产物
+      </label>
+      <label class="cfg-check">
+        <input id="projectBootstrapRunVisibilityCheck" type="checkbox" checked />
+        执行可见性校验
+      </label>
+    </section>
+
+    <section class="cfg-section">
+      <div class="project-bootstrap-toolbar">
+        <div>
+          <h3>创建结果</h3>
+          <p class="cfg-hint">会展示返回状态、关键路径、初始化会话与步骤结果。</p>
+        </div>
+        <button class="btn btn-ghost cfg-btn" id="projectBootstrapReloadBtn" type="button" hidden>刷新总览</button>
+      </div>
+      <div class="project-bootstrap-result" id="projectBootstrapResult"></div>
+    </section>
+
+    <div class="project-bootstrap-actions">
+      <div class="cfg-message" id="projectBootstrapMessage"></div>
+      <div class="project-bootstrap-action-buttons">
+        <button class="btn btn-ghost" id="projectBootstrapResetBtn" type="button">重置表单</button>
+        <button class="btn btn-primary" id="projectBootstrapSubmitBtn" type="button">创建项目</button>
+      </div>
+    </div>
   </aside>
 
   <script id="data" type="application/json">__PAYLOAD__</script>

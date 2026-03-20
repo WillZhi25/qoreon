@@ -516,8 +516,8 @@
       if (mask) mask.classList.add("show");
     }
 
-    function closeChannelDeleteModal() {
-      if (CHANNEL_MANAGE_UI.deleteSubmitting) return;
+    function closeChannelDeleteModal(force = false) {
+      if (CHANNEL_MANAGE_UI.deleteSubmitting && !force) return;
       CHANNEL_MANAGE_UI.deleteOpen = false;
       channelManageSetError("channelDeleteErr", "");
       const mask = document.getElementById("channelDeleteMask");
@@ -600,7 +600,7 @@
         }
         pruneDeletedChannelFromLocalState(CHANNEL_MANAGE_UI.deleteProjectId, CHANNEL_MANAGE_UI.deleteChannelName);
         if (typeof rebuildDashboardAfterStatusChange === "function") rebuildDashboardAfterStatusChange();
-        closeChannelDeleteModal();
+        closeChannelDeleteModal(true);
         if (typeof render === "function") render();
         if (typeof toast === "function") {
           toast("已删除通道「" + CHANNEL_MANAGE_UI.deleteChannelName + "」。", { tone: "success" });

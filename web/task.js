@@ -404,12 +404,14 @@
       const descEl = document.getElementById("projectDesc");
       const p = projectById(STATE.project);
       const name = displayProjectName(p) || "未知项目";
-      const desc = displayProjectDescription(p);
       if (titleEl) titleEl.textContent = name;
-      if (descEl) descEl.textContent = desc;
+      if (descEl) {
+        descEl.textContent = "";
+        descEl.hidden = true;
+      }
       ensureProjectSourceBadge(p);
       ensureProjectModeBadge(p);
-      try { document.title = name + " · 小秘书"; } catch (_) {}
+      try { document.title = name + " · Qoreon"; } catch (_) {}
     }
 
     function shortContextPath(raw) {
@@ -2954,7 +2956,7 @@
         ? window.location.origin
         : ((window.location.protocol && window.location.host)
           ? `${window.location.protocol}//${window.location.host}`
-          : "http://127.0.0.1:18770");
+          : "http://127.0.0.1:18765");
       return {
         primary: new URL("/share/avatar-library.html", origin).toString(),
         fallback: new URL("/dist/avatar-library.html", origin).toString(),

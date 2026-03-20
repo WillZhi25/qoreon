@@ -40,6 +40,7 @@ body {
 
 .hero,
 .notice-panel,
+.capability-panel,
 .table-wrap {
   background: var(--paper);
   border: 1px solid var(--line);
@@ -307,6 +308,64 @@ body {
 .notice-panel {
   padding: 18px 20px;
   border-radius: var(--radius-lg);
+}
+
+.capability-panel {
+  margin-top: 14px;
+  padding: 18px 20px;
+  border-radius: var(--radius-lg);
+}
+
+.capability-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.capability-card {
+  min-width: 0;
+  padding: 14px 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(100, 69, 31, 0.1);
+  background: rgba(255, 255, 255, 0.78);
+}
+
+.capability-card.current {
+  border-color: rgba(31, 106, 82, 0.22);
+  background: rgba(31, 106, 82, 0.08);
+}
+
+.capability-card.plan {
+  border-color: rgba(179, 106, 18, 0.2);
+  background: rgba(179, 106, 18, 0.08);
+}
+
+.capability-card.observed {
+  border-color: rgba(75, 107, 138, 0.18);
+  background: rgba(75, 107, 138, 0.08);
+}
+
+.capability-title {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.capability-main {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.45;
+  color: var(--text);
+}
+
+.capability-note {
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
 }
 
 .summary-line-title {
@@ -657,5 +716,9 @@ body {
 
   .hero-control-row > * {
     width: 100%;
+  }
+
+  .capability-grid {
+    grid-template-columns: 1fr;
   }
 }

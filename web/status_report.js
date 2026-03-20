@@ -305,10 +305,11 @@
   }
 
   function initQuickLinks() {
-    setQuickLink("overviewLink", "overview_page", "/share/project-overview-dashboard.html");
-    setQuickLink("taskLink", "task_page", "/share/project-task-dashboard.html");
-    setQuickLink("communicationLink", "communication_page", "/share/project-communication-audit.html");
-    setQuickLink("sessionHealthLink", "session_health_page", "/share/project-session-health-dashboard.html");
+  setQuickLink("overviewLink", "overview_page", "/share/project-overview-dashboard.html");
+  setQuickLink("taskLink", "task_page", "/share/project-task-dashboard.html");
+  setQuickLink("openSourceSyncLink", "open_source_sync_page", "/share/project-open-source-sync-board.html");
+  setQuickLink("communicationLink", "communication_page", "/share/project-communication-audit.html");
+  setQuickLink("sessionHealthLink", "session_health_page", "/share/project-session-health-dashboard.html");
   }
 
   renderHero();

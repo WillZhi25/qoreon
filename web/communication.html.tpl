@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>通讯分析 · 小秘书</title>
+  <title>通讯分析 · Qoreon</title>
   <style>__INLINE_CSS__</style>
 </head>
 <body>

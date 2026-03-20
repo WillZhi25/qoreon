@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>项目通讯录 · 小秘书</title>
+  <title>Qoreon · 项目通讯录</title>
   <style>__INLINE_CSS__</style>
 </head>
 <body>
@@ -11,7 +11,7 @@
     <header class="page-header">
       <div class="title-wrap">
         <div class="eyebrow">协作通讯录</div>
-        <h1 id="pageTitle">项目通讯录</h1>
+        <h1 id="pageTitle">Qoreon 项目通讯录</h1>
         <p id="pageSubtitle">按项目查看通道与 Agent，并复制可直接粘贴到输入框的协同对象写法。</p>
       </div>
       <div class="header-actions">
@@ -28,6 +28,10 @@
 
       <section class="content">
         <div class="summary-bar" id="summaryBar"></div>
+        <div class="toolbar">
+          <div class="filter-group" id="filterBar"></div>
+          <div class="toolbar-note" id="toolbarNote"></div>
+        </div>
         <div class="channel-grid" id="channelGrid"></div>
         <div class="empty-state" id="emptyState" hidden>当前条件下没有匹配的通讯录项。</div>
       </section>

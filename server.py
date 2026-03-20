@@ -49,6 +49,7 @@ from task_dashboard.adapters import (
     list_enabled_cli_types,
     CodexAdapter,
 )
+from task_dashboard.adapters.base import resolve_cli_executable, resolve_cli_executable_details
 from task_dashboard.config import (
     load_dashboard_config,
     resolve_dashboard_config_path,
@@ -58,6 +59,11 @@ from task_dashboard.communication_audit import audit_communication_patterns
 from task_dashboard.conversation_memo_store import ConversationMemoStore
 from task_dashboard.domain import bucket_key_for_status
 from task_dashboard.global_resource_graph import build_global_resource_graph
+from task_dashboard.local_cli_bins import (
+    cli_bin_command_name,
+    load_local_cli_bin_overrides,
+    save_local_cli_bin_overrides,
+)
 from task_dashboard.session_health import (
     DEFAULT_SESSION_HEALTH_INTERVAL_MINUTES,
     MAX_SESSION_HEALTH_INTERVAL_MINUTES,
@@ -1511,7 +1517,7 @@ def _server_token() -> str:
 def _dashboard_build_paths() -> dict[str, Path]:
     """Resolve static dashboard build script and output paths."""
     repo_root = _repo_root()
-    task_dir = repo_root
+    task_dir = repo_root / "项目管理-小秘书" / "项目看板" / "task-dashboard"
     script = task_dir / "build_project_task_dashboard.py"
     out_task = task_dir / "dist" / "project-task-dashboard.html"
     out_overview = task_dir / "dist" / "project-overview-dashboard.html"
@@ -1541,13 +1547,13 @@ def _rebuild_dashboard_static(timeout_s: int = 120) -> dict[str, Any]:
         "--root",
         str(repo_root),
         "--out-task",
-        "dist/project-task-dashboard.html",
+        "项目管理-小秘书/项目看板/task-dashboard/dist/project-task-dashboard.html",
         "--out-overview",
-        "dist/project-overview-dashboard.html",
+        "项目管理-小秘书/项目看板/task-dashboard/dist/project-overview-dashboard.html",
         "--out-communication",
-        "dist/project-communication-audit.html",
+        "项目管理-小秘书/项目看板/task-dashboard/dist/project-communication-audit.html",
         "--out-status-report",
-        "dist/project-status-report.html",
+        "项目管理-小秘书/项目看板/task-dashboard/dist/project-status-report.html",
     ]
     started = time.time()
     proc = subprocess.run(
@@ -1851,7 +1857,9 @@ def _resolve_runtime_project_id(
     if preferred and preferred in ids:
         return preferred
     port_map = {
-        18770: "task_dashboard_demo",
+        18765: "task_dashboard_prod",
+        18766: "task_dashboard_dev",
+        18767: "task_dashboard_prod_mirror",
     }
     mapped = port_map.get(int(port or 0), "")
     if mapped and mapped in ids:
@@ -1939,6 +1947,17 @@ def _normalize_cli_type_id(value: Any) -> str:
     return txt or "codex"
 
 
+def _cli_command_for_type(value: Any) -> str:
+    txt = _normalize_cli_type_id(value)
+    if txt == "trae":
+        return "trae-cli"
+    return txt
+
+
+def _load_local_cli_bin_overrides() -> dict[str, str]:
+    return load_local_cli_bin_overrides(Path(__file__).resolve().parent)
+
+
 def _collect_cli_tools_snapshot(
     cfg: dict[str, Any],
     *,
@@ -2021,6 +2040,11 @@ def _collect_cli_tools_snapshot(
         base = next((x for x in available if x.get("id") == cid), None)
         row = stats.get(cid) or {}
         projects_set = row.get("projects") if isinstance(row.get("projects"), set) else set()
+        command = _cli_command_for_type(cid)
+        resolved = resolve_cli_executable_details(command)
+        effective_bin = str(resolved.get("path") or "").strip()
+        local_bins = _load_local_cli_bin_overrides()
+        local_bin = str(local_bins.get(str(command).replace("-", "_")) or "").strip()
         item = {
             "id": cid,
             "name": str((base or {}).get("name") or cid),
@@ -2029,6 +2053,14 @@ def _collect_cli_tools_snapshot(
             "explicit_channel_count": int(row.get("explicit_channel_count") or 0),
             "session_binding_count": int(row.get("session_binding_count") or 0),
             "projects": sorted(str(x) for x in projects_set if str(x).strip()),
+            "command": command,
+            "command_label": cli_bin_command_name(command),
+            "effective_bin": effective_bin,
+            "bin_source": str(resolved.get("source") or ""),
+            "bin_exists": bool(resolved.get("exists")),
+            "bin_executable": bool(resolved.get("executable")),
+            "local_bin": local_bin,
+            "env_key": str(resolved.get("env_key") or ""),
         }
         item["configured"] = bool(
             item["effective_channel_count"] > 0 or item["session_binding_count"] > 0
@@ -2080,6 +2112,20 @@ def _set_runtime_max_concurrency_in_config(max_concurrency: int) -> Path:
     _atomic_write_text(config_path, updated)
     _clear_dashboard_cfg_cache()
     return config_path
+
+
+def _set_runtime_cli_bins_in_local_config(patch: dict[str, Any]) -> Path:
+    path = save_local_cli_bin_overrides(patch, Path(__file__).resolve().parent)
+    try:
+        resolve_cli_executable.cache_clear()
+    except Exception:
+        pass
+    try:
+        resolve_cli_executable_details.cache_clear()
+    except Exception:
+        pass
+    _clear_dashboard_cfg_cache()
+    return path
 
 
 def _resolve_dir(raw: str, repo_root: Path) -> Optional[Path]:
@@ -4259,6 +4305,7 @@ class Handler(BaseHTTPRequestHandler):
             rebuild_dashboard_static=_rebuild_dashboard_static,
             read_task_dashboard_generated_at=_read_task_dashboard_generated_at,
             set_runtime_max_concurrency_in_config=_set_runtime_max_concurrency_in_config,
+            set_runtime_cli_bins_in_local_config=_set_runtime_cli_bins_in_local_config,
             communication_audit_scope_catalog=_communication_audit_scope_catalog,
             parse_communication_audit_scopes=_parse_communication_audit_scopes,
             get_communication_audit_summary=_get_communication_audit_summary,
@@ -4296,6 +4343,7 @@ class Handler(BaseHTTPRequestHandler):
             get_project_config_response=get_project_config_response,
             attach_auto_inspection_candidate_preview=_attach_auto_inspection_candidate_preview,
             config_toml_path=_config_toml_path,
+            config_local_toml_path=_config_local_toml_path,
             load_project_auto_inspection_config=_load_project_auto_inspection_config,
             normalize_auto_inspection_tasks=_normalize_auto_inspection_tasks,
             normalize_inspection_task_id=_normalize_inspection_task_id,
@@ -4625,19 +4673,14 @@ class Handler(BaseHTTPRequestHandler):
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--bind", default="127.0.0.1")
-    ap.add_argument("--port", type=int, default=18770)
-    ap.add_argument(
-        "--static-root",
-        type=str,
-        default=str(Path(__file__).resolve().parent / "dist"),
-        help="directory to serve (defaults to ./dist)",
-    )
+    ap.add_argument("--port", type=int, default=18765)
+    ap.add_argument("--static-root", type=str, required=True, help="directory to serve (static_sites)")
     ap.add_argument("--runs-dir", type=str, default=str(Path(__file__).resolve().parent / ".runs"))
     ap.add_argument("--http-log", type=str, default=str(Path(__file__).resolve().parent / ".run" / "task-dashboard-server.http.log"))
     ap.add_argument(
         "--environment-name",
         type=str,
-        default=str(os.environ.get("TASK_DASHBOARD_ENV_NAME") or "demo"),
+        default=str(os.environ.get("TASK_DASHBOARD_ENV_NAME") or "stable"),
         help="runtime environment label",
     )
     args = ap.parse_args()
@@ -4653,7 +4696,7 @@ def main() -> int:
         print(f"[runstore] repaired legacy/hot meta drift: {len(repaired_legacy_rows)}")
     conversation_memo_store = ConversationMemoStore(base_dir=runs_dir.parent / ".run" / "conversation-memos")
     repo_root = Path(__file__).resolve().parent
-    environment_name = str(args.environment_name or "demo").strip() or "demo"
+    environment_name = str(args.environment_name or "stable").strip() or "stable"
     cfg = _load_dashboard_cfg_current()
     current_project_id = _resolve_runtime_project_id(
         cfg,

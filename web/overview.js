@@ -12,12 +12,14 @@
       ? String(DATA.links.status_report_page)
       : "/share/project-status-report.html");
     const TOKEN_KEY = "taskDashboard.token";
+    const STARRED_PROJECTS_KEY = "overview.starredProjects";
 
     const STATE = {
       q: "",
       showStats: true,
       sort: "risk",
       projectFilters: [],
+      starredProjects: [],
     };
     const PROJECT_FILTER_UI = {
       draftIds: [],
@@ -25,8 +27,30 @@
     const CFG = {
       opened: false,
       savingGlobal: false,
+      savingCliBins: false,
       loading: false,
     };
+    const ACTIVITY = {
+      loaded: false,
+      loading: false,
+      error: "",
+      runs: [],
+    };
+    const WORKLOG = {
+      opened: false,
+      loading: false,
+      error: "",
+      items: null,
+    };
+    const PROJECT_BOOTSTRAP = {
+      opened: false,
+      submitting: false,
+      result: null,
+      channels: [],
+      nextChannelKey: 1,
+      taskRootTouched: false,
+    };
+    const WORKLOG_MANIFEST_PATH = "docs/background/task_dashboard-worklog-index.json";
 
     function firstNonEmptyText(list, fallback = "") {
       const arr = Array.isArray(list) ? list : [];
@@ -165,12 +189,7 @@
     }
 
     function displayDashboardTitle(raw) {
-      const title = String(raw || "").trim() || "项目总揽";
-      if (!shouldUseStableDisplayCopy()) return title;
-      return title
-        .replace(/\s*[（(]refactor[)）]\s*$/iu, "")
-        .replace(/\s*[（(]开发[)）]\s*$/u, "")
-        .trim() || "项目总揽";
+      return "Qoreon";
     }
 
     function renderEnvironmentBadge(info) {
@@ -289,6 +308,34 @@
       return new Set(normalizeProjectFilterIds(ref));
     }
 
+    function selectedStarredProjectSet(source = null) {
+      const ref = source == null ? STATE.starredProjects : source;
+      const validIds = new Set(allProjectIds());
+      return new Set(normalizeProjectFilterIds(ref, validIds));
+    }
+
+    function isProjectStarred(projectId) {
+      const pid = String(projectId || "").trim();
+      if (!pid) return false;
+      return selectedStarredProjectSet().has(pid);
+    }
+
+    function saveStarredProjects(next) {
+      const validIds = new Set(allProjectIds());
+      STATE.starredProjects = normalizeProjectFilterIds(next, validIds);
+      try { localStorage.setItem(STARRED_PROJECTS_KEY, JSON.stringify(STATE.starredProjects)); } catch (_) {}
+    }
+
+    function toggleProjectStar(projectId) {
+      const pid = String(projectId || "").trim();
+      if (!pid) return;
+      const set = selectedStarredProjectSet();
+      if (set.has(pid)) set.delete(pid);
+      else set.add(pid);
+      saveStarredProjects(Array.from(set));
+      renderCards();
+    }
+
     function isProjectFilterNarrowing(ids = null) {
       const selected = normalizeProjectFilterIds(ids == null ? STATE.projectFilters : ids);
       const allIds = allProjectIds();
@@ -366,6 +413,7 @@
         btn.classList.toggle("active", active);
         btn.title = active ? ("项目筛选：" + projectFilterLabel()) : "项目筛选";
       }
+      renderStats();
       renderCards();
     }
 
@@ -417,6 +465,10 @@
       return out;
     }
 
+    const TASK_DONE_STATUSES = new Set(["已完成", "已验收通过", "已消费", "已解决", "已关闭", "已停止", "已合并"]);
+    const TASK_TODO_STATUSES = new Set(["待开始", "未开始", "待处理"]);
+    const TASK_PAUSE_STATUSES = new Set(["已暂停", "暂缓"]);
+
     function authHeaders(base = {}) {
       const h = Object.assign({}, base || {});
       try {
@@ -443,6 +495,296 @@
       return data || {};
     }
 
+    async function fetchJsonWithMeta(url, options = {}) {
+      const opt = Object.assign({}, options || {});
+      opt.headers = authHeaders(opt.headers || {});
+      const resp = await fetch(url, opt);
+      let data = null;
+      try {
+        data = await resp.json();
+      } catch (_) {
+        data = null;
+      }
+      return {
+        ok: resp.ok,
+        status: resp.status,
+        data: data || {},
+      };
+    }
+
+    async function refreshOverviewProjectsFromServer(ensureProjectId = "") {
+      const bust = String(Date.now());
+      const url = new URL(window.location.href);
+      url.searchParams.set("_overview_refresh", bust);
+      const resp = await fetch(url.toString(), {
+        cache: "no-store",
+        headers: authHeaders({ "Cache-Control": "no-cache" }),
+      });
+      if (!resp.ok) throw new Error("总览刷新失败：HTTP " + resp.status);
+      const html = await resp.text();
+      const doc = new DOMParser().parseFromString(html, "text/html");
+      const dataEl = doc.getElementById("data");
+      if (!dataEl || !String(dataEl.textContent || "").trim()) {
+        throw new Error("总览刷新失败：未找到最新数据");
+      }
+      let nextData = {};
+      try {
+        nextData = JSON.parse(String(dataEl.textContent || "{}"));
+      } catch (_) {
+        throw new Error("总览刷新失败：最新数据解析失败");
+      }
+      const nextOverview = (nextData && typeof nextData.overview === "object" && nextData.overview) ? nextData.overview : {};
+      OVER.totals = (nextOverview && typeof nextOverview.totals === "object" && nextOverview.totals) ? nextOverview.totals : {};
+      OVER.projects = Array.isArray(nextOverview.projects) ? nextOverview.projects : [];
+
+      const validIds = new Set((Array.isArray(OVER.projects) ? OVER.projects : []).map((p) => String((p && p.project_id) || "").trim()).filter(Boolean));
+      const ensuredId = String(ensureProjectId || "").trim();
+      STATE.projectFilters = normalizeProjectFilterIds(STATE.projectFilters, validIds);
+      if (ensuredId && validIds.has(ensuredId) && !STATE.projectFilters.includes(ensuredId)) {
+        STATE.projectFilters = normalizeProjectFilterIds(STATE.projectFilters.concat([ensuredId]), validIds);
+        try { localStorage.setItem("overview.projectFilter", JSON.stringify(STATE.projectFilters)); } catch (_) {}
+      }
+      STATE.starredProjects = normalizeProjectFilterIds(STATE.starredProjects, validIds);
+      PROJECT_FILTER_UI.draftIds = normalizeProjectFilterIds(STATE.projectFilters, validIds);
+      renderProjectFilterOptions();
+      applyStateToDom();
+      renderStats();
+      renderCards();
+      return { ok: true, projectCount: OVER.projects.length };
+    }
+
+    async function fetchRecentOverviewRuns(dayWindow = 7, maxPages = 6, pageSize = 200) {
+      const out = [];
+      const seen = new Set();
+      const cutoffMs = Date.now() - Math.max(1, Number(dayWindow) || 7) * 86400000;
+      let beforeCreatedAt = "";
+      for (let page = 0; page < Math.max(1, Number(maxPages) || 1); page++) {
+        const params = new URLSearchParams();
+        params.set("limit", String(pageSize || 200));
+        params.set("payloadMode", "none");
+        if (beforeCreatedAt) params.set("beforeCreatedAt", beforeCreatedAt);
+        const resp = await fetchJson("/api/codex/runs?" + params.toString(), { cache: "no-store" });
+        const runs = Array.isArray(resp.runs) ? resp.runs : [];
+        if (!runs.length) break;
+        let oldestText = "";
+        let oldestTs = Number.POSITIVE_INFINITY;
+        for (const run of runs) {
+          const runId = String((run && run.id) || "").trim();
+          if (!runId || seen.has(runId)) continue;
+          seen.add(runId);
+          out.push(run);
+          const createdAt = String((run && run.createdAt) || "").trim();
+          const createdDate = parseDateTime(createdAt);
+          const createdTs = createdDate ? createdDate.getTime() : -1;
+          if (createdTs >= 0 && createdTs < oldestTs) {
+            oldestTs = createdTs;
+            oldestText = createdAt;
+          }
+        }
+        if (!oldestText || oldestText === beforeCreatedAt) break;
+        if (oldestTs >= 0 && oldestTs < cutoffMs) break;
+        beforeCreatedAt = oldestText;
+      }
+      return out;
+    }
+
+    function runProjectId(run) {
+      const ctx = (run && typeof run.project_execution_context === "object") ? run.project_execution_context : {};
+      return firstNonEmptyText([
+        run && run.projectId,
+        run && run.project_id,
+        ctx && ctx.target && ctx.target.project_id,
+        ctx && ctx.source && ctx.source.project_id,
+      ]);
+    }
+
+    function runChannelName(run) {
+      const ctx = (run && typeof run.project_execution_context === "object") ? run.project_execution_context : {};
+      return firstNonEmptyText([
+        run && run.channelName,
+        run && run.channel_name,
+        ctx && ctx.target && ctx.target.channel_name,
+        ctx && ctx.source && ctx.source.channel_name,
+      ]);
+    }
+
+    function runSessionId(run) {
+      const ctx = (run && typeof run.project_execution_context === "object") ? run.project_execution_context : {};
+      return firstNonEmptyText([
+        run && run.sessionId,
+        run && run.session_id,
+        ctx && ctx.target && ctx.target.session_id,
+        ctx && ctx.source && ctx.source.session_id,
+      ]);
+    }
+
+    function runAgentKey(run) {
+      const projectId = runProjectId(run) || "(unknown)";
+      const channelName = runChannelName(run);
+      const sessionId = runSessionId(run);
+      if (channelName) return projectId + "::" + channelName;
+      if (sessionId) return projectId + "::" + sessionId;
+      return firstNonEmptyText([run && run.sender_name, run && run.sender_id], projectId + "::unknown");
+    }
+
+    function runMessageWeight(run) {
+      const senderType = String((run && run.sender_type) || "").trim().toLowerCase();
+      if (senderType === "legacy") return 0;
+      return Math.max(1, 1 + num(run && run.agentMessagesCount));
+    }
+
+    function currentFilteredProjects() {
+      const all = Array.isArray(OVER.projects) ? OVER.projects : [];
+      const ids = selectedProjectFilterSet();
+      if (!ids.size) return all.slice();
+      return all.filter((p) => ids.has(String((p && p.project_id) || "").trim()));
+    }
+
+    function classifyTaskStatus(raw) {
+      const text = String(raw || "").trim();
+      if (!text) return "";
+      if (TASK_DONE_STATUSES.has(text)) return "done";
+      if (TASK_TODO_STATUSES.has(text)) return "todo";
+      if (TASK_PAUSE_STATUSES.has(text)) return "pause";
+      return "in_progress";
+    }
+
+    function formatCount(v) {
+      return num(v).toLocaleString("zh-CN");
+    }
+
+    function buildStockSeries(finalValue, dailyValues) {
+      const values = Array.isArray(dailyValues) ? dailyValues.map((item) => num(item)) : [];
+      const baseline = Math.max(0, num(finalValue) - values.reduce((sum, item) => sum + item, 0));
+      let running = baseline;
+      return values.map((item) => {
+        running += item;
+        return running;
+      });
+    }
+
+    function buildTaskOverviewModel(projects) {
+      const src = Array.isArray(projects) ? projects : [];
+      const projectIds = new Set(src.map((p) => String((p && p.project_id) || "").trim()).filter(Boolean));
+      const days = lastNDaysKeys(7);
+      const inProgressMap = new Map(days.map((key) => [key, 0]));
+      const todoMap = new Map(days.map((key) => [key, 0]));
+      const doneMap = new Map(days.map((key) => [key, 0]));
+      const changeMap = new Map(days.map((key) => [key, 0]));
+      const summary = { in_progress: 0, todo: 0, done: 0, changes7d: 0 };
+
+      for (const project of src) {
+        const totals = (project && typeof project.totals === "object") ? project.totals : {};
+        summary.in_progress += num(totals.in_progress);
+        summary.todo += num(totals.todo);
+        summary.done += num(totals.done);
+      }
+
+      const items = Array.isArray(DATA.items) ? DATA.items : [];
+      for (const item of items) {
+        const projectId = String((item && (item.project_id || item.projectId)) || "").trim();
+        if (projectIds.size && !projectIds.has(projectId)) continue;
+        const updatedAt = parseDateTime(item && item.updated_at);
+        if (!updatedAt) continue;
+        const dayKey = dateKeyLocal(updatedAt);
+        if (!inProgressMap.has(dayKey)) continue;
+        const state = classifyTaskStatus(item && item.status);
+        changeMap.set(dayKey, changeMap.get(dayKey) + 1);
+        if (state === "done") doneMap.set(dayKey, doneMap.get(dayKey) + 1);
+        else if (state === "todo") todoMap.set(dayKey, todoMap.get(dayKey) + 1);
+        else if (state === "in_progress") inProgressMap.set(dayKey, inProgressMap.get(dayKey) + 1);
+      }
+
+      const inProgressDaily = days.map((key) => inProgressMap.get(key) || 0);
+      const todoDaily = days.map((key) => todoMap.get(key) || 0);
+      const doneDaily = days.map((key) => doneMap.get(key) || 0);
+      const changesDaily = days.map((key) => changeMap.get(key) || 0);
+      summary.changes7d = changesDaily.reduce((sum, value) => sum + value, 0);
+
+      return {
+        labels: days.map((key) => key.slice(5)),
+        summary,
+        series: {
+          stock_in_progress: buildStockSeries(summary.in_progress, inProgressDaily),
+          stock_todo: buildStockSeries(summary.todo, todoDaily),
+          stock_done: buildStockSeries(summary.done, doneDaily),
+          changes: changesDaily,
+        },
+      };
+    }
+
+    function buildMessageOverviewModel(projects) {
+      const src = Array.isArray(projects) ? projects : [];
+      const projectIds = new Set(src.map((p) => String((p && p.project_id) || "").trim()).filter(Boolean));
+      const days = lastNDaysKeys(7);
+      const messageMap = new Map(days.map((key) => [key, 0]));
+      const sessionMap = new Map(days.map((key) => [key, new Set()]));
+      const agentMap = new Map(days.map((key) => [key, new Set()]));
+      const projectActivity = new Map();
+      const summary = { messages24h: 0, sessions24h: 0, agents24h: 0 };
+      const summarySessions = new Set();
+      const summaryAgents = new Set();
+      const cutoff24h = Date.now() - 24 * 3600000;
+
+      const ensureProjectActivity = (projectId) => {
+        const key = String(projectId || "").trim();
+        if (!projectActivity.has(key)) {
+          projectActivity.set(key, {
+            messages24h: 0,
+            sessions24h: new Set(),
+            agents24h: new Set(),
+          });
+        }
+        return projectActivity.get(key);
+      };
+
+      const runs = Array.isArray(ACTIVITY.runs) ? ACTIVITY.runs : [];
+      for (const run of runs) {
+        const projectId = runProjectId(run);
+        if (!projectId || (projectIds.size && !projectIds.has(projectId))) continue;
+        const createdAt = parseDateTime(run && run.createdAt);
+        if (!createdAt) continue;
+        const weight = runMessageWeight(run);
+        if (weight <= 0) continue;
+        const dayKey = dateKeyLocal(createdAt);
+        const sessionKey = runSessionId(run);
+        const agentKey = runAgentKey(run);
+        if (messageMap.has(dayKey)) {
+          messageMap.set(dayKey, messageMap.get(dayKey) + weight);
+          if (sessionKey) sessionMap.get(dayKey).add(sessionKey);
+          if (agentKey) agentMap.get(dayKey).add(agentKey);
+        }
+        if (createdAt.getTime() >= cutoff24h) {
+          const entry = ensureProjectActivity(projectId);
+          entry.messages24h += weight;
+          if (sessionKey) {
+            entry.sessions24h.add(sessionKey);
+            summarySessions.add(sessionKey);
+          }
+          if (agentKey) {
+            entry.agents24h.add(agentKey);
+            summaryAgents.add(agentKey);
+          }
+          summary.messages24h += weight;
+        }
+      }
+
+      summary.sessions24h = summarySessions.size;
+      summary.agents24h = summaryAgents.size;
+
+      return {
+        loaded: ACTIVITY.loaded,
+        labels: days.map((key) => key.slice(5)),
+        summary,
+        byProject: projectActivity,
+        series: {
+          message_increment: days.map((key) => messageMap.get(key) || 0),
+          session_stock: days.map((key) => (sessionMap.get(key) ? sessionMap.get(key).size : 0)),
+          agent_stock: days.map((key) => (agentMap.get(key) ? agentMap.get(key).size : 0)),
+        },
+      };
+    }
+
     function cfgMsg(text, cls = "") {
       const n = document.getElementById("cfgMessage");
       if (!n) return;
@@ -460,6 +802,628 @@
       if (!CFG.opened) cfgMsg("");
     }
 
+    function setWorklogOpened(opened) {
+      WORKLOG.opened = !!opened;
+      document.body.classList.toggle("worklog-open", WORKLOG.opened);
+      const mask = document.getElementById("worklogMask");
+      if (mask) mask.hidden = !WORKLOG.opened;
+      const drawer = document.getElementById("worklogDrawer");
+      if (drawer) drawer.setAttribute("aria-hidden", WORKLOG.opened ? "false" : "true");
+    }
+
+    function normalizeWorklogItems(raw) {
+      const list = Array.isArray(raw) ? raw : [];
+      return list.map((item) => {
+        const row = (item && typeof item === "object") ? item : {};
+        const title = String(row.title || row.name || row.label || "").trim();
+        const url = String(row.url || row.href || row.link || "").trim();
+        const cover = String(row.cover || row.image || row.thumb || "").trim();
+        const dateText = formatWorklogDateZh(row.date || row.time || row.created_at || row.createdAt || "");
+        if (!title || !url) return null;
+        return { title, url, cover, dateText };
+      }).filter(Boolean);
+    }
+
+    function formatWorklogDateZh(raw) {
+      const text = String(raw || "").trim();
+      if (!text) return "";
+      if (/[年月日]/.test(text)) return text;
+      const d = parseDateTime(text);
+      if (!d) return text;
+      return d.getFullYear() + "年" + (d.getMonth() + 1) + "月" + d.getDate() + "日";
+    }
+
+    function renderWorklogList() {
+      const list = document.getElementById("worklogList");
+      if (!list) return;
+      list.innerHTML = "";
+      if (WORKLOG.loading) {
+        list.appendChild(el("div", { class: "worklog-empty", text: "正在读取开发日志..." }));
+        return;
+      }
+      if (WORKLOG.error) {
+        list.appendChild(el("div", { class: "worklog-empty", text: WORKLOG.error }));
+        return;
+      }
+      const items = Array.isArray(WORKLOG.items) ? WORKLOG.items : [];
+      if (!items.length) {
+        list.appendChild(el("div", { class: "worklog-empty", text: "当前还没有登记开发日志。" }));
+        return;
+      }
+      items.forEach((item, index) => {
+        const card = el("a", {
+          class: "worklog-item" + (index === 0 ? " is-featured" : ""),
+          href: item.url,
+          target: "_blank",
+          rel: "noreferrer noopener",
+        });
+        if (item.cover) {
+          card.appendChild(el("img", {
+            class: "worklog-item-cover",
+            src: item.cover,
+            alt: item.title,
+            loading: "lazy",
+          }));
+        } else {
+          card.appendChild(el("div", {
+            class: "worklog-item-cover worklog-item-cover-empty",
+            text: "日志",
+          }));
+        }
+        const body = el("div", { class: "worklog-item-body" });
+        if (item.dateText) {
+          body.appendChild(el("div", { class: "worklog-item-date", text: item.dateText }));
+        }
+        body.appendChild(el("div", { class: "worklog-item-title", text: item.title }));
+        card.appendChild(body);
+        list.appendChild(card);
+      });
+    }
+
+    async function loadWorklogItems() {
+      const data = await fetchJson("/api/fs/read?path=" + encodeURIComponent(WORKLOG_MANIFEST_PATH));
+      const item = (data && data.item && typeof data.item === "object") ? data.item : null;
+      const content = item && typeof item.content === "string" ? item.content : "";
+      const parsed = content ? JSON.parse(content) : {};
+      WORKLOG.items = normalizeWorklogItems(parsed && parsed.items);
+    }
+
+    async function openWorklogDrawer() {
+      setCfgOpened(false);
+      setProjectBootstrapOpened(false);
+      WORKLOG.error = "";
+      WORKLOG.loading = true;
+      setWorklogOpened(true);
+      renderWorklogList();
+      try {
+        await loadWorklogItems();
+      } catch (e) {
+        WORKLOG.error = "读取开发日志失败：" + (e && e.message ? e.message : e);
+      } finally {
+        WORKLOG.loading = false;
+        renderWorklogList();
+      }
+    }
+
+    function closeWorklogDrawer() {
+      setWorklogOpened(false);
+    }
+
+    function projectBootstrapMsg(text, cls = "") {
+      const n = document.getElementById("projectBootstrapMessage");
+      if (!n) return;
+      n.className = "cfg-message" + (cls ? (" " + cls) : "");
+      n.textContent = String(text || "");
+    }
+
+    function setProjectBootstrapOpened(opened) {
+      PROJECT_BOOTSTRAP.opened = !!opened;
+      document.body.classList.toggle("project-bootstrap-open", PROJECT_BOOTSTRAP.opened);
+      const mask = document.getElementById("projectBootstrapMask");
+      if (mask) mask.hidden = !PROJECT_BOOTSTRAP.opened;
+      const drawer = document.getElementById("projectBootstrapDrawer");
+      if (drawer) drawer.setAttribute("aria-hidden", PROJECT_BOOTSTRAP.opened ? "false" : "true");
+      if (!PROJECT_BOOTSTRAP.opened && !PROJECT_BOOTSTRAP.submitting) projectBootstrapMsg("");
+    }
+
+    function createProjectBootstrapChannel(overrides = {}) {
+      return Object.assign(
+        {
+          key: PROJECT_BOOTSTRAP.nextChannelKey++,
+          name: "",
+          desc: "",
+          cli_type: "codex",
+          model: "",
+          reasoning_effort: "",
+          primary: false,
+        },
+        overrides || {},
+      );
+    }
+
+    function createInitialProjectBootstrapChannels() {
+      return [
+        createProjectBootstrapChannel({
+          name: "主体-总控",
+          desc: "总控通道",
+          primary: true,
+        }),
+      ];
+    }
+
+    function defaultTaskRootRel(projectRootRaw) {
+      const projectRoot = String(projectRootRaw || "").trim().replace(/\/+$/g, "");
+      return projectRoot ? (projectRoot + "/任务规划") : "";
+    }
+
+    function syncProjectBootstrapTaskRoot(force = false) {
+      const taskRootInput = document.getElementById("projectBootstrapTaskRoot");
+      if (!taskRootInput) return;
+      if (PROJECT_BOOTSTRAP.taskRootTouched && !force) return;
+      const projectRootValue = document.getElementById("projectBootstrapProjectRoot")?.value || "";
+      taskRootInput.value = defaultTaskRootRel(projectRootValue);
+      if (force) PROJECT_BOOTSTRAP.taskRootTouched = false;
+    }
+
+    function updateProjectBootstrapSubmitButton() {
+      const submitBtn = document.getElementById("projectBootstrapSubmitBtn");
+      const resetBtn = document.getElementById("projectBootstrapResetBtn");
+      if (submitBtn) {
+        const result = PROJECT_BOOTSTRAP.result;
+        const hideSubmit = !!(result && result.ok && !result.dry_run);
+        submitBtn.hidden = hideSubmit;
+        submitBtn.disabled = hideSubmit || !!PROJECT_BOOTSTRAP.submitting;
+        submitBtn.textContent = PROJECT_BOOTSTRAP.submitting
+          ? "创建中..."
+          : "创建项目";
+      }
+      if (resetBtn) resetBtn.disabled = !!PROJECT_BOOTSTRAP.submitting;
+    }
+
+    function renderProjectBootstrapChannelList() {
+      const list = document.getElementById("projectBootstrapChannelList");
+      if (!list) return;
+      list.innerHTML = "";
+      if (!PROJECT_BOOTSTRAP.channels.length) {
+        PROJECT_BOOTSTRAP.channels = createInitialProjectBootstrapChannels();
+      }
+      PROJECT_BOOTSTRAP.channels.forEach((channel, index) => {
+        const card = el("div", { class: "project-bootstrap-channel" });
+        const head = el("div", { class: "project-bootstrap-channel-head" });
+        const title = el("div", { class: "project-bootstrap-channel-title" });
+        title.appendChild(document.createTextNode("通道 " + String(index + 1)));
+        const titleName = el("span", { text: channel.name || "未命名" });
+        title.appendChild(titleName);
+
+        const actions = el("div", { class: "project-bootstrap-channel-actions" });
+        const primaryLabel = el("label", { class: "project-bootstrap-channel-toggle" });
+        const primaryInput = el("input", { type: "checkbox" });
+        primaryInput.checked = !!channel.primary;
+        primaryInput.addEventListener("change", (e) => {
+          channel.primary = !!e.target.checked;
+        });
+        primaryLabel.appendChild(primaryInput);
+        primaryLabel.appendChild(document.createTextNode("初始化主会话"));
+
+        const removeBtn = el("button", {
+          class: "btn btn-ghost project-bootstrap-remove-btn",
+          type: "button",
+          text: "移除",
+        });
+        removeBtn.disabled = PROJECT_BOOTSTRAP.channels.length <= 1;
+        removeBtn.addEventListener("click", () => {
+          if (PROJECT_BOOTSTRAP.channels.length <= 1) return;
+          PROJECT_BOOTSTRAP.channels = PROJECT_BOOTSTRAP.channels.filter((item) => item.key !== channel.key);
+          renderProjectBootstrapChannelList();
+        });
+
+        actions.appendChild(primaryLabel);
+        actions.appendChild(removeBtn);
+        head.appendChild(title);
+        head.appendChild(actions);
+        card.appendChild(head);
+
+        const grid = el("div", { class: "project-bootstrap-channel-grid" });
+
+        const nameField = el("label", { class: "cfg-field" });
+        nameField.appendChild(el("span", { text: "通道名称" }));
+        const nameInput = el("input", {
+          class: "input",
+          type: "text",
+          placeholder: "主体-总控",
+          value: channel.name,
+          autocomplete: "off",
+        });
+        nameInput.addEventListener("input", (e) => {
+          channel.name = String(e.target.value || "");
+          titleName.textContent = channel.name.trim() || "未命名";
+        });
+        nameField.appendChild(nameInput);
+
+        const descField = el("label", { class: "cfg-field" });
+        descField.appendChild(el("span", { text: "通道说明" }));
+        const descInput = el("input", {
+          class: "input",
+          type: "text",
+          placeholder: "总控通道",
+          value: channel.desc,
+          autocomplete: "off",
+        });
+        descInput.addEventListener("input", (e) => {
+          channel.desc = String(e.target.value || "");
+        });
+        descField.appendChild(descInput);
+
+        const cliField = el("label", { class: "cfg-field" });
+        cliField.appendChild(el("span", { text: "CLI 类型" }));
+        const cliSelect = el("select", { class: "input" });
+        ["codex", "claude", "opencode", "gemini", "trae"].forEach((value) => {
+          const option = el("option", { value, text: value });
+          option.selected = value === channel.cli_type;
+          cliSelect.appendChild(option);
+        });
+        cliSelect.addEventListener("change", (e) => {
+          channel.cli_type = String(e.target.value || "codex");
+        });
+        cliField.appendChild(cliSelect);
+
+        const modelField = el("label", { class: "cfg-field" });
+        modelField.appendChild(el("span", { text: "模型" }));
+        const modelInput = el("input", {
+          class: "input",
+          type: "text",
+          placeholder: "默认（可手动填写具体模型名）",
+          value: channel.model,
+          autocomplete: "off",
+        });
+        modelInput.addEventListener("input", (e) => {
+          channel.model = String(e.target.value || "");
+        });
+        modelField.appendChild(modelInput);
+
+        const reasoningField = el("label", { class: "cfg-field" });
+        reasoningField.appendChild(el("span", { text: "推理强度" }));
+        const reasoningSelect = el("select", { class: "input" });
+        [
+          { value: "", label: "默认" },
+          { value: "low", label: "low" },
+          { value: "medium", label: "medium" },
+          { value: "high", label: "high" },
+          { value: "xhigh", label: "xhigh" },
+        ].forEach((item) => {
+          const option = el("option", { value: item.value, text: item.label });
+          option.selected = item.value === (channel.reasoning_effort || "");
+          reasoningSelect.appendChild(option);
+        });
+        reasoningSelect.addEventListener("change", (e) => {
+          channel.reasoning_effort = String(e.target.value || "");
+        });
+        reasoningField.appendChild(reasoningSelect);
+
+        grid.appendChild(nameField);
+        grid.appendChild(descField);
+        grid.appendChild(cliField);
+        grid.appendChild(modelField);
+        grid.appendChild(reasoningField);
+        card.appendChild(grid);
+        list.appendChild(card);
+      });
+    }
+
+    function renderProjectBootstrapResult() {
+      const box = document.getElementById("projectBootstrapResult");
+      const reloadBtn = document.getElementById("projectBootstrapReloadBtn");
+      if (!box) return;
+      box.innerHTML = "";
+      const result = PROJECT_BOOTSTRAP.result;
+      if (!result) {
+        box.className = "project-bootstrap-result";
+        box.appendChild(el("div", {
+          class: "project-bootstrap-empty",
+          text: "提交后会在这里显示配置写入、目录创建、主会话初始化和步骤结果。",
+        }));
+        if (reloadBtn) reloadBtn.hidden = true;
+        return;
+      }
+
+      const ok = !!result.ok;
+      const dryRun = !!result.dry_run;
+      box.className = "project-bootstrap-result " + (ok ? "is-ok" : "is-err");
+      if (reloadBtn) reloadBtn.hidden = !(ok && !dryRun);
+
+      const head = el("div", { class: "project-bootstrap-result-head" });
+      const titleWrap = el("div");
+      const stepText = String(result.resume_from_step || "").trim();
+      titleWrap.appendChild(el("div", {
+        class: "project-bootstrap-result-title",
+        text: ok
+          ? (dryRun ? "dry-run 校验通过" : "项目创建完成")
+          : "项目创建失败",
+      }));
+      const subtitleParts = [];
+      const projectId = String(result.project_id || "").trim();
+      if (projectId) subtitleParts.push("项目 ID: " + projectId);
+      if (result.reused) subtitleParts.push("命中已有同规格项目，按复用返回");
+      if (!ok && stepText) subtitleParts.push("可从步骤 `" + stepText + "` 继续收口");
+      if (result.error) subtitleParts.push(String(result.error));
+      if (subtitleParts.length) {
+        titleWrap.appendChild(el("div", {
+          class: "project-bootstrap-result-subtitle",
+          text: subtitleParts.join(" · "),
+        }));
+      }
+      head.appendChild(titleWrap);
+      head.appendChild(el("div", {
+        class: "project-bootstrap-status " + (ok ? "ok" : "err"),
+        text: ok ? "SUCCESS" : "FAILED",
+      }));
+      box.appendChild(head);
+
+      const appendSectionTitle = (text) => {
+        box.appendChild(el("div", { class: "project-bootstrap-section-title", text }));
+      };
+      const appendKvList = (title, items) => {
+        const rows = (Array.isArray(items) ? items : []).filter((item) => item && item.value);
+        if (!rows.length) return;
+        appendSectionTitle(title);
+        const list = el("div", { class: "project-bootstrap-kv-list" });
+        rows.forEach((item) => {
+          const row = el("div", { class: "project-bootstrap-kv" });
+          row.appendChild(el("div", { class: "project-bootstrap-kv-label", text: item.label }));
+          if (item.code) {
+            row.appendChild(el("code", { class: "project-bootstrap-code", text: String(item.value) }));
+          } else {
+            row.appendChild(el("div", { class: "project-bootstrap-kv-value", text: String(item.value) }));
+          }
+          list.appendChild(row);
+        });
+        box.appendChild(list);
+      };
+
+      appendKvList("关键路径", [
+        { label: "配置文件", value: result.config_path, code: true },
+        { label: "项目目录", value: result.project_root, code: true },
+        { label: "任务目录", value: result.task_root, code: true },
+        { label: "会话真源", value: result.session_store_path, code: true },
+      ]);
+
+      const registryPaths = Array.isArray(result.registry_paths) ? result.registry_paths.filter(Boolean) : [];
+      if (registryPaths.length) {
+        appendSectionTitle("注册产物");
+        const list = el("div", { class: "project-bootstrap-kv-list" });
+        registryPaths.forEach((path) => {
+          const row = el("div", { class: "project-bootstrap-kv" });
+          row.appendChild(el("div", { class: "project-bootstrap-kv-label", text: "产物路径" }));
+          row.appendChild(el("code", { class: "project-bootstrap-code", text: String(path) }));
+          list.appendChild(row);
+        });
+        box.appendChild(list);
+      }
+
+      const createdSessions = Array.isArray(result.created_sessions) ? result.created_sessions : [];
+      if (createdSessions.length) {
+        appendSectionTitle("主会话初始化");
+        const list = el("div", { class: "project-bootstrap-created-list" });
+        createdSessions.forEach((item) => {
+          const row = el("div", { class: "project-bootstrap-created-item" });
+          const channelName = String(item.channel_name || "").trim() || "未命名通道";
+          const sessionId = String(item.session_id || "").trim();
+          const flags = [];
+          if (item.created) flags.push("已创建");
+          if (item.reused) flags.push("已复用");
+          row.appendChild(el("div", {
+            class: "project-bootstrap-step-label",
+            text: channelName + (flags.length ? (" · " + flags.join(" / ")) : ""),
+          }));
+          if (sessionId) {
+            row.appendChild(el("code", { class: "project-bootstrap-code", text: sessionId }));
+          }
+          list.appendChild(row);
+        });
+        box.appendChild(list);
+      }
+
+      const warnings = Array.isArray(result.warnings) ? result.warnings : [];
+      if (warnings.length) {
+        appendSectionTitle("提醒");
+        const list = el("div", { class: "project-bootstrap-warning-list" });
+        warnings.forEach((item) => {
+          const row = el("div", { class: "project-bootstrap-warning-item" });
+          const code = String(item && item.code || "").trim();
+          const message = String(item && item.message || item || "").trim();
+          row.textContent = code ? (code + " · " + message) : message;
+          list.appendChild(row);
+        });
+        box.appendChild(list);
+      }
+
+      const steps = Array.isArray(result.step_results) ? result.step_results : [];
+      if (steps.length) {
+        appendSectionTitle("步骤结果");
+        const list = el("div", { class: "project-bootstrap-step-list" });
+        steps.forEach((item) => {
+          const row = el("div", { class: "project-bootstrap-step " + (item && item.ok ? "ok" : "err") });
+          const label = String(item && item.step || "unknown").trim() || "unknown";
+          const detailParts = [];
+          detailParts.push(item && item.ok ? "通过" : "失败");
+          if (item && item.reused) detailParts.push("复用");
+          if (item && item.skipped) detailParts.push("跳过");
+          if (item && item.count != null) detailParts.push("count=" + String(item.count));
+          if (item && item.error) detailParts.push(String(item.error));
+          row.appendChild(el("div", { class: "project-bootstrap-step-label", text: label }));
+          row.appendChild(el("div", { class: "project-bootstrap-step-text", text: detailParts.join(" · ") }));
+          list.appendChild(row);
+        });
+        box.appendChild(list);
+      }
+    }
+
+    function resetProjectBootstrapForm() {
+      const setValue = (id, value) => {
+        const node = document.getElementById(id);
+        if (node) node.value = value;
+      };
+      const setChecked = (id, value) => {
+        const node = document.getElementById(id);
+        if (node) node.checked = !!value;
+      };
+      setValue("projectBootstrapProjectId", "");
+      setValue("projectBootstrapProjectName", "");
+      setValue("projectBootstrapProjectRoot", "");
+      setValue("projectBootstrapTaskRoot", "");
+      setValue("projectBootstrapColor", "#0F63F2");
+      setValue("projectBootstrapProfile", "project_privileged_full");
+      setValue("projectBootstrapEnvironment", "stable");
+      setValue("projectBootstrapDescription", "");
+      setChecked("projectBootstrapCreatePrimarySessions", true);
+      setChecked("projectBootstrapGenerateRegistry", true);
+      setChecked("projectBootstrapRunVisibilityCheck", true);
+      const visibilityInput = document.getElementById("projectBootstrapRunVisibilityCheck");
+      if (visibilityInput) visibilityInput.disabled = false;
+      PROJECT_BOOTSTRAP.channels = createInitialProjectBootstrapChannels();
+      PROJECT_BOOTSTRAP.result = null;
+      PROJECT_BOOTSTRAP.taskRootTouched = false;
+      renderProjectBootstrapChannelList();
+      renderProjectBootstrapResult();
+      projectBootstrapMsg("");
+      updateProjectBootstrapSubmitButton();
+    }
+
+    function buildProjectBootstrapPayload() {
+      const projectId = String(document.getElementById("projectBootstrapProjectId")?.value || "").trim().toLowerCase();
+      const projectName = String(document.getElementById("projectBootstrapProjectName")?.value || "").trim();
+      const projectRootRel = String(document.getElementById("projectBootstrapProjectRoot")?.value || "").trim();
+      const taskRootRel = String(document.getElementById("projectBootstrapTaskRoot")?.value || "").trim();
+      const color = (String(document.getElementById("projectBootstrapColor")?.value || "").trim() || "#0F63F2").toUpperCase();
+      const description = String(document.getElementById("projectBootstrapDescription")?.value || "").trim();
+      const profile = String(document.getElementById("projectBootstrapProfile")?.value || "").trim() || "project_privileged_full";
+      const environment = String(document.getElementById("projectBootstrapEnvironment")?.value || "").trim() || "stable";
+
+      if (!projectId) throw new Error("请填写项目 ID");
+      if (!/^[a-z0-9][a-z0-9_-]*$/.test(projectId)) throw new Error("项目 ID 仅支持小写字母、数字、下划线和中划线");
+      if (!projectName) throw new Error("请填写项目名称");
+      if (!projectRootRel) throw new Error("请填写项目根目录");
+      if (!taskRootRel) throw new Error("请填写任务根目录");
+      if (projectRootRel.startsWith("/") || taskRootRel.startsWith("/")) {
+        throw new Error("项目目录和任务目录需要填写相对路径");
+      }
+      if (!/^#[0-9A-F]{6}$/.test(color)) throw new Error("主题色需为 #RRGGBB 格式");
+      if (!profile) throw new Error("请选择执行权限");
+      if (!environment) throw new Error("请选择环境");
+
+      const seen = new Set();
+      const channels = PROJECT_BOOTSTRAP.channels.map((item) => {
+        const name = String(item && item.name || "").trim();
+        const desc = String(item && item.desc || "").trim();
+        const cliType = String(item && item.cli_type || "codex").trim().toLowerCase() || "codex";
+        const model = String(item && item.model || "").trim();
+        const reasoningEffort = String(item && item.reasoning_effort || "").trim();
+        if (!name) throw new Error("请补全所有通道名称");
+        if (seen.has(name)) throw new Error("通道名称不能重复：" + name);
+        seen.add(name);
+        return {
+          name,
+          desc: desc || name,
+          cli_type: cliType,
+          model,
+          reasoning_effort: reasoningEffort,
+          primary: !!(item && item.primary),
+        };
+      });
+      if (!channels.length) throw new Error("至少保留一个通道");
+
+      const createPrimarySessions = !!document.getElementById("projectBootstrapCreatePrimarySessions")?.checked;
+      const primaryChannelNames = channels.filter((item) => item.primary).map((item) => item.name);
+      if (createPrimarySessions && !primaryChannelNames.length) {
+        throw new Error("已开启主会话初始化时，至少勾选一个通道");
+      }
+
+      const payload = {
+        project_id: projectId,
+        project_name: projectName,
+        project_root_rel: projectRootRel,
+        task_root_rel: taskRootRel,
+        color,
+        description,
+        channels: channels.map((item) => ({
+          name: item.name,
+          desc: item.desc,
+          cli_type: item.cli_type,
+          model: item.model,
+          reasoning_effort: item.reasoning_effort,
+        })),
+        execution_context: {
+          profile,
+          environment,
+        },
+        bootstrap: {
+          create_primary_sessions: createPrimarySessions,
+          primary_channel_names: primaryChannelNames,
+          generate_registry: !!document.getElementById("projectBootstrapGenerateRegistry")?.checked,
+          run_dedup: true,
+          run_visibility_check: !!document.getElementById("projectBootstrapRunVisibilityCheck")?.checked,
+          send_bootstrap_message: false,
+          send_init_training: false,
+          dry_run: false,
+          first_message: "",
+        },
+      };
+      return payload;
+    }
+
+    async function submitProjectBootstrap() {
+      if (PROJECT_BOOTSTRAP.submitting) return;
+      let payload = null;
+      try {
+        payload = buildProjectBootstrapPayload();
+      } catch (e) {
+        projectBootstrapMsg(e && e.message ? e.message : e, "err");
+        return;
+      }
+
+      PROJECT_BOOTSTRAP.submitting = true;
+      PROJECT_BOOTSTRAP.result = null;
+      renderProjectBootstrapResult();
+      updateProjectBootstrapSubmitButton();
+      projectBootstrapMsg("正在创建项目...");
+
+      try {
+        const resp = await fetchJsonWithMeta("/api/projects/bootstrap", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const data = (resp && typeof resp.data === "object") ? resp.data : {};
+        PROJECT_BOOTSTRAP.result = data;
+        renderProjectBootstrapResult();
+        if (resp.ok && data.ok) {
+          let successText = data.dry_run
+            ? "dry-run 校验通过；未实际写入项目。"
+            : (data.reused ? "项目规格已存在，已按复用返回。" : "项目已创建。");
+          if (!data.dry_run) {
+            try {
+              await refreshOverviewProjectsFromServer(data.project_id || "");
+              successText += " 总览已自动刷新。";
+            } catch (refreshErr) {
+              successText += " 如需看列表请刷新总览。";
+            }
+          }
+          projectBootstrapMsg(successText, "ok");
+        } else {
+          const err = String(data.error || ("HTTP " + String(resp.status || ""))).trim();
+          projectBootstrapMsg("创建失败：" + err, "err");
+        }
+      } catch (e) {
+        const err = e && e.message ? e.message : String(e);
+        PROJECT_BOOTSTRAP.result = { ok: false, error: err, warnings: [], step_results: [] };
+        renderProjectBootstrapResult();
+        projectBootstrapMsg("创建失败：" + err, "err");
+      } finally {
+        PROJECT_BOOTSTRAP.submitting = false;
+        updateProjectBootstrapSubmitButton();
+      }
+    }
+
     function parseOptInt(v) {
       const s = String(v == null ? "" : v).trim();
       if (!s) return null;
@@ -470,6 +1434,7 @@
 
     function renderCliTools(cliTools) {
       const summaryEl = document.getElementById("cfgCliSummary");
+      const hintEl = document.getElementById("cfgCliBinsHint");
       const listEl = document.getElementById("cfgCliList");
       if (!summaryEl || !listEl) return;
 
@@ -479,6 +1444,12 @@
       const linkableCount = available.filter((x) => x && x.enabled !== false).length;
       const configuredCount = byCli.filter((x) => x && x.configured).length;
       summaryEl.textContent = `可联通 ${linkableCount}/${available.length || rows.length}；已配置 ${configuredCount}`;
+      if (hintEl) {
+        const cfgPath = String(cliTools?.config_path || "").trim();
+        hintEl.textContent = cfgPath
+          ? `本机明文配置；留空时自动发现。配置文件：${cfgPath}`
+          : "本机明文配置；留空时自动发现。";
+      }
 
       listEl.innerHTML = "";
       if (!rows.length) {
@@ -495,6 +1466,13 @@
         const configured = !!(row && row.configured);
         const channelCount = Number((row && row.effective_channel_count) || 0);
         const sessionCount = Number((row && row.session_binding_count) || 0);
+        const command = String((row && row.command) || id || "").trim();
+        const effectiveBin = String((row && row.effective_bin) || "").trim();
+        const localBin = String((row && row.local_bin) || "").trim();
+        const binSource = String((row && row.bin_source) || "").trim() || "default";
+        const binExists = !!(row && row.bin_exists);
+        const binExecutable = !!(row && row.bin_executable);
+        const effectiveReady = !!effectiveBin && (binExists || !effectiveBin.includes("/")) && (binExecutable || !effectiveBin.includes("/"));
 
         const wrap = document.createElement("div");
         wrap.className = "cfg-cli-row";
@@ -518,12 +1496,48 @@
         const p2 = document.createElement("span");
         p2.className = "cfg-pill " + (configured ? "ok" : "");
         p2.textContent = configured ? `已配置 通道${channelCount} 会话${sessionCount}` : "未配置";
+        const p3 = document.createElement("span");
+        p3.className = "cfg-pill " + (effectiveReady ? "ok" : "warn");
+        p3.textContent = effectiveReady ? `当前可用 · ${binSource}` : `待检查 · ${binSource}`;
         right.appendChild(p1);
         right.appendChild(document.createTextNode(" "));
         right.appendChild(p2);
+        right.appendChild(document.createTextNode(" "));
+        right.appendChild(p3);
 
         wrap.appendChild(left);
         wrap.appendChild(right);
+
+        const pathBlock = document.createElement("div");
+        pathBlock.className = "cfg-cli-path";
+        const currentLine = document.createElement("div");
+        currentLine.className = "cfg-cli-path-line";
+        const currentLabel = document.createElement("span");
+        currentLabel.textContent = "当前执行";
+        const currentCode = document.createElement("code");
+        currentCode.textContent = effectiveBin || command || "-";
+        currentLine.appendChild(currentLabel);
+        currentLine.appendChild(currentCode);
+        pathBlock.appendChild(currentLine);
+        const inputLine = document.createElement("label");
+        inputLine.className = "cfg-cli-input-line";
+        const inputTitle = document.createElement("span");
+        inputTitle.textContent = "本机覆盖";
+        const input = document.createElement("input");
+        input.className = "input cfg-cli-input-control";
+        input.type = "text";
+        input.value = localBin;
+        input.placeholder = effectiveBin || command || "";
+        input.setAttribute("data-cli-bin-id", id);
+        input.setAttribute("data-cli-command", command);
+        inputLine.appendChild(inputTitle);
+        inputLine.appendChild(input);
+        pathBlock.appendChild(inputLine);
+        const note = document.createElement("div");
+        note.className = "cfg-cli-note";
+        note.textContent = "留空后回退自动发现；当前优先级：本机配置 > 环境变量 > PATH/默认发现";
+        pathBlock.appendChild(note);
+        wrap.appendChild(pathBlock);
         listEl.appendChild(wrap);
       }
     }
@@ -549,7 +1563,10 @@
       if (tokenRequired) tokenRequired.textContent = global.token_required ? "开启" : "关闭";
       const withLocal = document.getElementById("cfgWithLocalConfig");
       if (withLocal) withLocal.textContent = global.with_local_config ? "开启" : "关闭";
-      renderCliTools(global.cli_tools || {});
+      renderCliTools({
+        ...(global.cli_tools || {}),
+        config_path: String(global.cli_bins_config_path || ""),
+      });
     }
 
     async function loadPlatformConfig() {
@@ -589,12 +1606,47 @@
       }
     }
 
+    function updateCliBinsSaveButton() {
+      const btn = document.getElementById("cfgSaveCliBinsBtn");
+      if (!btn) return;
+      btn.disabled = !!CFG.savingCliBins;
+      btn.textContent = CFG.savingCliBins ? "保存中..." : "保存 CLI 路径";
+    }
+
+    async function saveCliBinsConfig() {
+      if (CFG.savingCliBins) return;
+      const inputs = Array.from(document.querySelectorAll("[data-cli-bin-id]"));
+      const cliBins = {};
+      for (const node of inputs) {
+        const key = String(node && node.getAttribute && node.getAttribute("data-cli-bin-id") || "").trim();
+        if (!key) continue;
+        cliBins[key] = String(node.value || "").trim();
+      }
+      CFG.savingCliBins = true;
+      updateCliBinsSaveButton();
+      cfgMsg("正在保存 CLI 路径...");
+      try {
+        const body = await fetchJson("/api/config/global", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ cli_bins: cliBins }),
+        });
+        fillConfigForm(body);
+        cfgMsg("CLI 路径已保存；新发起会话会按新路径解析", "ok");
+      } catch (e) {
+        cfgMsg("保存失败：" + (e && e.message ? e.message : e), "err");
+      } finally {
+        CFG.savingCliBins = false;
+        updateCliBinsSaveButton();
+      }
+    }
+
     function getAvatarLibraryLinks() {
       const origin = /^https?:\/\//.test(window.location.origin || "")
         ? window.location.origin
         : ((window.location.protocol && window.location.host)
           ? `${window.location.protocol}//${window.location.host}`
-          : "http://127.0.0.1:18770");
+          : "http://127.0.0.1:18765");
       return {
         primary: new URL("/share/avatar-library.html", origin).toString(),
         fallback: new URL("/dist/avatar-library.html", origin).toString(),
@@ -655,15 +1707,6 @@
       const w = 600, h = 80, pad = 4;
       const n = labels.length || 1;
 
-      // Find max across all series
-      let maxVal = 1;
-      for (const s of series) {
-        if (s.values) {
-          const m = Math.max(...s.values.map(x => num(x)));
-          if (m > maxVal) maxVal = m;
-        }
-      }
-
       const svg = svgEl("svg", {
         class: "trend-chart",
         viewBox: `0 0 ${w} ${h}`,
@@ -672,16 +1715,33 @@
         preserveAspectRatio: "none"
       });
 
-      const sx = (i) => pad + (i * (w - pad * 2)) / Math.max(1, n - 1);
-      const sy = (vv) => h - pad - ((h - pad * 2) * vv) / maxVal;
+      const innerW = w - pad * 2;
+      const sx = (i) => n <= 1 ? (pad + innerW / 2) : (pad + (i * innerW) / Math.max(1, n - 1));
 
       // Separate bar series and line series
       const barSeries = series.filter(s => s.type === 'bar');
       const lineSeries = series.filter(s => s.type === 'line');
+      let maxBarVal = 1;
+      let maxLineVal = 1;
+      barSeries.forEach((s) => {
+        (s.values || []).forEach((item) => {
+          const value = num(item);
+          if (value > maxBarVal) maxBarVal = value;
+        });
+      });
+      lineSeries.forEach((s) => {
+        (s.values || []).forEach((item) => {
+          const value = num(item);
+          if (value > maxLineVal) maxLineVal = value;
+        });
+      });
+      const syBar = (vv) => h - pad - ((h - pad * 2) * vv) / maxBarVal;
+      const syLine = (vv) => h - pad - ((h - pad * 2) * vv) / maxLineVal;
 
       // Draw bar series first (background)
-      const barW = Math.max(4, (w - pad * 2) / n - 6);
-      const barOffset = barSeries.length > 1 ? barW / 2 : 0;
+      const slotW = n <= 1 ? Math.min(42, innerW) : innerW / n;
+      const barClusterW = Math.min(34, Math.max(10, slotW * 0.52));
+      const singleBarW = barSeries.length ? Math.max(5, (barClusterW - Math.max(0, barSeries.length - 1) * 2) / barSeries.length) : 0;
 
       barSeries.forEach((s, si) => {
         const v = s.values || [];
@@ -694,15 +1754,15 @@
 
         for (let i = 0; i < v.length; i++) {
           const vv = num(v[i]);
-          const barH = Math.max(2, ((h - pad * 2) * vv) / maxVal);
-          const x = pad + i * ((w - pad * 2) / n) + (si * barW / barSeries.length) - barOffset / 2;
-          const y = h - pad - barH;
+          const barH = Math.max(2, ((h - pad * 2) * vv) / maxBarVal);
+          const x = sx(i) - barClusterW / 2 + si * (singleBarW + 2);
+          const y = syBar(vv);
 
           const rect = svgEl("rect", {
-            x, y, width: barW / barSeries.length - 1, height: barH,
+            x, y, width: singleBarW, height: barH,
             rx: 2, ry: 2,
             fill: `url(#${gradId})`,
-            opacity: 0.7
+            opacity: 0.8
           });
           const title = svgEl("title");
           title.textContent = `${labels[i]} · ${s.name}: ${vv}`;
@@ -717,25 +1777,26 @@
         if (v.length < 2) return;
 
         const color = s.color || "#0066ff";
-        const areaGradId = "area" + Math.random().toString(36).slice(2, 8);
-        createGradient(svg, areaGradId, [
-          { offset: 0, color: color + "30" },
-          { offset: 100, color: color + "00" }
-        ]);
+        if (s.area !== false) {
+          const areaGradId = "area" + Math.random().toString(36).slice(2, 8);
+          createGradient(svg, areaGradId, [
+            { offset: 0, color: color + "30" },
+            { offset: 100, color: color + "00" }
+          ]);
 
-        // Area
-        const areaPath = [`M ${sx(0)},${h}`];
-        for (let i = 0; i < v.length; i++) {
-          areaPath.push(`L ${sx(i)},${sy(num(v[i]))}`);
+          const areaPath = [`M ${sx(0)},${h}`];
+          for (let i = 0; i < v.length; i++) {
+            areaPath.push(`L ${sx(i)},${syLine(num(v[i]))}`);
+          }
+          areaPath.push(`L ${sx(v.length - 1)},${h} Z`);
+          svg.appendChild(svgEl("path", {
+            d: areaPath.join(" "),
+            fill: `url(#${areaGradId})`
+          }));
         }
-        areaPath.push(`L ${sx(v.length - 1)},${h} Z`);
-        svg.appendChild(svgEl("path", {
-          d: areaPath.join(" "),
-          fill: `url(#${areaGradId})`
-        }));
 
         // Line
-        const linePoints = v.map((vv, i) => `${sx(i)},${sy(num(vv))}`).join(" ");
+        const linePoints = v.map((vv, i) => `${sx(i)},${syLine(num(vv))}`).join(" ");
         svg.appendChild(svgEl("polyline", {
           points: linePoints,
           fill: "none",
@@ -749,7 +1810,7 @@
         const lastIdx = v.length - 1;
         svg.appendChild(svgEl("circle", {
           cx: sx(lastIdx),
-          cy: sy(num(v[lastIdx])),
+          cy: syLine(num(v[lastIdx])),
           r: 4,
           fill: color,
           stroke: "#fff",
@@ -774,7 +1835,11 @@
     (function initHead() {
       const t = displayDashboardTitle((DATA.dashboard && DATA.dashboard.title) ? String(DATA.dashboard.title) : "项目总揽");
       document.getElementById("title").textContent = t;
-      document.getElementById("sub").textContent = "生成时间：" + String(DATA.generated_at || "");
+      const sub = document.getElementById("sub");
+      if (sub) {
+        sub.textContent = "";
+        sub.hidden = true;
+      }
       loadHealthInfo().then(renderEnvironmentBadge).catch(() => {});
     })();
 
@@ -788,9 +1853,12 @@
         if (sort === "name" || sort === "risk") STATE.sort = sort;
         const projectFilter = localStorage.getItem("overview.projectFilter");
         if (projectFilter) STATE.projectFilters = normalizeProjectFilterIds(projectFilter);
+        const starredProjects = localStorage.getItem(STARRED_PROJECTS_KEY);
+        if (starredProjects) STATE.starredProjects = normalizeProjectFilterIds(starredProjects);
       } catch (_) {}
       const validIds = new Set((Array.isArray(OVER.projects) ? OVER.projects : []).map((p) => String((p && p.project_id) || "")));
       STATE.projectFilters = normalizeProjectFilterIds(STATE.projectFilters, validIds);
+      STATE.starredProjects = normalizeProjectFilterIds(STATE.starredProjects, validIds);
       if (!STATE.projectFilters.length) {
         STATE.projectFilters = normalizeProjectFilterIds(allProjectIds(), validIds);
       }
@@ -896,16 +1964,22 @@
     })();
 
     (function initConfigControls() {
+      const worklogBtn = document.getElementById("worklogBtn");
+      const worklogCloseBtn = document.getElementById("worklogCloseBtn");
+      const worklogMask = document.getElementById("worklogMask");
       const statusReportBtn = document.getElementById("statusReportBtn");
       const communicationBtn = document.getElementById("communicationBtn");
       const cfgBtn = document.getElementById("configBtn");
       const closeBtn = document.getElementById("cfgCloseBtn");
       const mask = document.getElementById("cfgMask");
       const saveGlobalBtn = document.getElementById("cfgSaveGlobalBtn");
+      const saveCliBinsBtn = document.getElementById("cfgSaveCliBinsBtn");
       const openAvatarBtn = document.getElementById("cfgOpenAvatarLibraryBtn");
       const copyAvatarBtn = document.getElementById("cfgCopyAvatarLibraryBtn");
 
       const openDrawer = async () => {
+        setWorklogOpened(false);
+        setProjectBootstrapOpened(false);
         setCfgOpened(true);
         renderAvatarLibraryEntry();
         await loadPlatformConfig();
@@ -914,10 +1988,15 @@
 
       if (statusReportBtn) statusReportBtn.addEventListener("click", openStatusReportPage);
       if (communicationBtn) communicationBtn.addEventListener("click", openCommunicationPage);
+      if (worklogBtn) worklogBtn.addEventListener("click", openWorklogDrawer);
+      if (worklogCloseBtn) worklogCloseBtn.addEventListener("click", closeWorklogDrawer);
+      if (worklogMask) worklogMask.addEventListener("click", closeWorklogDrawer);
       if (cfgBtn) cfgBtn.addEventListener("click", openDrawer);
       if (closeBtn) closeBtn.addEventListener("click", closeDrawer);
       if (mask) mask.addEventListener("click", closeDrawer);
       if (saveGlobalBtn) saveGlobalBtn.addEventListener("click", saveGlobalConfig);
+      updateCliBinsSaveButton();
+      if (saveCliBinsBtn) saveCliBinsBtn.addEventListener("click", saveCliBinsConfig);
       if (openAvatarBtn) openAvatarBtn.addEventListener("click", () => {
         const links = getAvatarLibraryLinks();
         window.open(links.primary, "_blank", "noopener,noreferrer");
@@ -928,90 +2007,100 @@
           e.preventDefault();
           closeDrawer();
         }
+        if (e.key === "Escape" && WORKLOG.opened) {
+          e.preventDefault();
+          closeWorklogDrawer();
+        }
       });
 
     })();
 
-    (function renderStats() {
-      const s = document.getElementById("stats");
-      s.innerHTML = "";
-      const t = OVER.totals || {};
+    function renderStats() {
+      const container = document.getElementById("stats");
+      if (!container) return;
+      container.innerHTML = "";
 
-      const DONE_STATUSES = new Set(["已完成", "已验收通过", "已消费", "已解决", "已关闭", "已停止"]);
-      const PAUSE_STATUSES = new Set(["已暂停", "暂缓"]);
-      const items = Array.isArray(DATA.items) ? DATA.items : [];
+      const projects = currentFilteredProjects();
+      const taskModel = buildTaskOverviewModel(projects);
+      const messageModel = buildMessageOverviewModel(projects);
+      const messageLoaded = !!messageModel.loaded;
 
-      const days = lastNDaysKeys(14);
-      const mapAll = new Map(days.map((k) => [k, 0]));
-      const mapActive = new Map(days.map((k) => [k, 0]));
-      const projActive = new Map(days.map((k) => [k, new Set()]));
-
-      for (const it of items) {
-        const d = parseDateTime(it && it.updated_at);
-        if (!d) continue;
-        const key = dateKeyLocal(d);
-        if (!mapAll.has(key)) continue;
-        mapAll.set(key, mapAll.get(key) + 1);
-        const st = String((it && it.status) || "");
-        const isActive = !DONE_STATUSES.has(st) && !PAUSE_STATUSES.has(st);
-        if (isActive) {
-          mapActive.set(key, mapActive.get(key) + 1);
-          projActive.get(key).add(String(it && (it.project_id || it.projectId || "") || ""));
-        }
+      function miniStat(label, value) {
+        const node = el("div", { class: "mini-stat" });
+        node.appendChild(el("div", { class: "mini-stat-k", text: label }));
+        node.appendChild(el("div", { class: "mini-stat-v", text: value }));
+        return node;
       }
 
-      const allSeries = days.map((k) => mapAll.get(k) || 0);
-      const activeSeries = days.map((k) => mapActive.get(k) || 0);
-      const projActiveSeries = days.map((k) => (projActive.get(k) ? projActive.get(k).size : 0));
-
-      const todayActive = activeSeries.length ? activeSeries[activeSeries.length - 1] : 0;
-      const sum7Active = activeSeries.slice(-7).reduce((a, b) => a + b, 0);
-      const todayAll = allSeries.length ? allSeries[allSeries.length - 1] : 0;
-
-      const done = num(t.done);
-      const total = num(t.total);
-      const requirementsTotal = num(t.requirements_total || 0);
-      const rate = total > 0 ? Math.round((done / total) * 100) + "%" : "0%";
-
-      // 4 Stat Cards
-      function statCard(label, val, sub, highlight) {
-        const c = el("div", { class: "stat-card" + (highlight ? " highlight" : "") });
-        c.appendChild(el("div", { class: "stat-label", text: label }));
-        c.appendChild(el("div", { class: "stat-value", text: val }));
-        if (sub) c.appendChild(el("div", { class: "stat-sub", text: sub }));
-        return c;
+      function legendItem(color, text, shape) {
+        const dotClass = "legend-dot" + (shape ? (" is-" + shape) : "");
+        return el("span", {
+          class: "legend-item",
+          html: `<span class="${dotClass}" style="--legend-color:${color};background:${color}"></span>${text}`,
+        });
       }
 
-      s.appendChild(statCard("项目", fmt(t.projects), null, true));
-      s.appendChild(statCard("总任务", fmt(t.total), null, false));
-      s.appendChild(statCard("活跃", fmt(t.active), fmtPct(t.active, t.total), false));
-      s.appendChild(statCard("需求", fmt(requirementsTotal), null, false));
-      s.appendChild(statCard("完成率", rate, `${done}/${total}`, false));
+      function trendPanel(title, summaryItems, chartSeries, chartLabels, legendItems) {
+        const panel = el("article", { class: "trend-panel" });
+        const head = el("div", { class: "panel-head" });
+        head.appendChild(el("h2", { class: "panel-title", text: title }));
+        head.appendChild(el("span", { class: "period", text: "近7天" }));
+        panel.appendChild(head);
 
-      // Combined Trend Card (5th column, spans remaining space)
-      const trendCard = el("div", { class: "trend-card" });
-      const trendHead = el("div", { class: "trend-header" });
-      trendHead.appendChild(el("div", { class: "trend-title", text: "14天趋势" }));
-      trendHead.appendChild(el("div", { class: "trend-meta", text: `今日活跃 ${todayActive} · 7日 ${sum7Active}` }));
-      trendCard.appendChild(trendHead);
+        const summary = el("div", { class: "panel-summary" });
+        for (const item of summaryItems) summary.appendChild(miniStat(item.label, item.value));
+        panel.appendChild(summary);
 
-      const labels = days.map(x => x.slice(5));
-      const chart = combinedChartSvg([
-        { name: "全量", values: allSeries, color: "#d1d5db", type: "bar" },
-        { name: "项目", values: projActiveSeries, color: "#86efac", type: "bar" },
-        { name: "活跃", values: activeSeries, color: "#0066ff", type: "line" },
-      ], labels, "14天趋势");
-      trendCard.appendChild(chart);
+        const chartWrap = el("div", { class: "chart-wrap" });
+        chartWrap.appendChild(combinedChartSvg(chartSeries, chartLabels, title));
+        panel.appendChild(chartWrap);
 
-      // Legend
-      const legend = el("div", { class: "trend-legend" });
-      legend.appendChild(el("div", { class: "legend-item", html: '<span class="legend-dot" style="background:#0066ff"></span>活跃' }));
-      legend.appendChild(el("div", { class: "legend-item", html: '<span class="legend-dot" style="background:#10b981"></span>项目' }));
-      legend.appendChild(el("div", { class: "legend-item", html: '<span class="legend-dot" style="background:#a3a3a3"></span>全量' }));
-      trendCard.appendChild(legend);
+        const legend = el("div", { class: "legend" });
+        for (const item of legendItems) legend.appendChild(legendItem(item.color, item.label, item.shape));
+        panel.appendChild(legend);
+        return panel;
+      }
 
-      s.appendChild(trendCard);
-    })();
+      container.appendChild(trendPanel(
+        "任务情况趋势",
+        [
+          { label: "进行中", value: formatCount(taskModel.summary.in_progress) },
+          { label: "待开始", value: formatCount(taskModel.summary.todo) },
+          { label: "近7天变更", value: formatCount(taskModel.summary.changes7d) },
+        ],
+        [
+          { name: "日变更量", values: taskModel.series.changes, color: "#94a3b8", type: "bar" },
+          { name: "进行中存量", values: taskModel.series.stock_in_progress, color: "#1f8f5f", type: "line", area: false },
+          { name: "待开始存量", values: taskModel.series.stock_todo, color: "#b36a00", type: "line", area: false },
+        ],
+        taskModel.labels,
+        [
+          { color: "#1f8f5f", label: "进行中存量", shape: "line" },
+          { color: "#b36a00", label: "待开始存量", shape: "line" },
+          { color: "#94a3b8", label: "日变更量", shape: "bar" },
+        ]
+      ));
+
+      container.appendChild(trendPanel(
+        "Agent 活动消息趋势",
+        [
+          { label: "24h消息", value: messageLoaded ? formatCount(messageModel.summary.messages24h) : "—" },
+          { label: "活跃会话", value: messageLoaded ? formatCount(messageModel.summary.sessions24h) : "—" },
+          { label: "活跃Agent", value: messageLoaded ? formatCount(messageModel.summary.agents24h) : "—" },
+        ],
+        [
+          { name: "日消息增量", values: messageModel.series.message_increment, color: "#2563eb", type: "bar" },
+          { name: "活跃会话存量", values: messageModel.series.session_stock, color: "#14b8a6", type: "line", area: false },
+          { name: "活跃Agent存量", values: messageModel.series.agent_stock, color: "#f59e0b", type: "line", area: false },
+        ],
+        messageModel.labels,
+        [
+          { color: "#14b8a6", label: "活跃会话存量", shape: "line" },
+          { color: "#f59e0b", label: "活跃Agent存量", shape: "line" },
+          { color: "#2563eb", label: "日消息增量", shape: "bar" },
+        ]
+      ));
+    }
 
     function renderCards() {
       const list = document.getElementById("cards");
@@ -1030,94 +2119,197 @@
         const filterSet = new Set(filterIds);
         projects = projects.filter((p) => filterSet.has(String((p && p.project_id) || "")));
       }
+      const compareByCurrentMode = (a, b) => {
+        if (STATE.sort === "name") {
+          return displayProjectName(a).localeCompare(displayProjectName(b), "zh-Hans-CN");
+        }
+        return riskScore(b) - riskScore(a);
+      };
       if (STATE.sort === "name") {
-        projects = projects.slice().sort((a, b) =>
-          displayProjectName(a).localeCompare(displayProjectName(b), "zh-Hans-CN")
-        );
+        projects = projects.slice().sort(compareByCurrentMode);
       } else {
-        projects = projects.slice().sort((a, b) => riskScore(b) - riskScore(a));
+        projects = projects.slice().sort(compareByCurrentMode);
       }
+      projects = projects.slice().sort((a, b) => {
+        const starDelta = Number(isProjectStarred(b && b.project_id)) - Number(isProjectStarred(a && a.project_id));
+        if (starDelta) return starDelta;
+        return compareByCurrentMode(a, b);
+      });
       const filterLabel = projectFilterLabel();
       const filterSeg = isProjectFilterNarrowing() && filterLabel ? (" · 已筛选：" + filterLabel) : "";
-      setMeta(`${projects.length} / ${all.length} 项目${filterSeg} · ⌘K 搜索`);
+      const countText = projects.length === all.length
+        ? `共 ${all.length} 个项目`
+        : `共 ${projects.length} / ${all.length} 个项目`;
+      setMeta(countText + filterSeg);
 
       if (!projects.length) {
         list.appendChild(el("div", { class: "empty-state", text: "没有匹配项目。" }));
         return;
       }
 
-      for (const p of projects) {
-        const card = el("article", { class: "card" });
-
-        // Header
-        const head = el("div", { class: "card-header" });
-        const tg = el("div", { class: "card-title-group" });
-        const projectName = displayProjectName(p) || p.project_id;
-        const projectDesc = displayProjectDescription(p);
-        tg.appendChild(el("a", { class: "card-title", text: projectName, href: toTaskUrl(p.project_id, "") }));
-        if (projectDesc) tg.appendChild(el("div", { class: "card-desc", text: projectDesc }));
-        tg.appendChild(buildProjectSourceBadge(p));
-        head.appendChild(tg);
-
-        const actions = el("div", { class: "card-actions" });
-        actions.appendChild(el("button", { class: "btn btn-primary", text: "作战室", onclick: `enterProject('${p.project_id}')` }));
-        actions.appendChild(el("a", { class: "btn btn-ghost", text: "看板 →", href: toTaskUrl(p.project_id, "") }));
-        head.appendChild(actions);
-        card.appendChild(head);
-
-        // Body
-        const body = el("div", { class: "card-body" });
-
-        const tt = (p && p.totals) ? p.totals : {};
-        const sup = num(tt.supervised);
-        const ip = num(tt.in_progress);
-        const act = num(tt.active);
-        const done = num(tt.done);
-        const total = num(tt.total);
-        const reqTotal = num(tt.requirements_total || 0);
-
-        // Tags
-        const tags = el("div", { class: "tags" });
-        if (sup > 0) tags.appendChild(el("span", { class: "tag danger", text: `督办 ${sup}` }));
-        if (ip > 0) tags.appendChild(el("span", { class: "tag warning", text: `进行中 ${ip}` }));
-        if (reqTotal > 0) tags.appendChild(el("span", { class: "tag", text: `需求 ${reqTotal}` }));
-        if (act > 0) tags.appendChild(el("span", { class: "tag primary", text: `活跃 ${act}` }));
-        if (total === 0) tags.appendChild(el("span", { class: "tag", text: "无任务" }));
-        body.appendChild(tags);
-
-        // Metrics
-        const metrics = el("div", { class: "metrics-row" });
-        const mItem = (k, v) => {
-          const d = el("div", { class: "metric" });
-          d.appendChild(el("div", { class: "metric-val", text: v }));
-          d.appendChild(el("div", { class: "metric-key", text: k }));
-          return d;
+      const messageModel = buildMessageOverviewModel(currentFilteredProjects());
+      const messageLoaded = !!messageModel.loaded;
+      const messageMetricForProject = (projectId) => {
+        return messageModel.byProject.get(String(projectId || "").trim()) || {
+          messages24h: 0,
+          sessions24h: new Set(),
+          agents24h: new Set(),
         };
-        metrics.appendChild(mItem("总计", fmt(total)));
-        metrics.appendChild(mItem("活跃", fmt(act)));
-        metrics.appendChild(mItem("需求", fmt(reqTotal)));
-        metrics.appendChild(mItem("完成", fmt(done)));
-        body.appendChild(metrics);
+      };
+      const flatMetric = (label, value) => {
+        const metric = el("div", { class: "flat-metric" });
+        metric.appendChild(el("div", { class: "flat-metric-v", text: value }));
+        metric.appendChild(el("div", { class: "flat-metric-k", text: label }));
+        return metric;
+      };
+      const flatSection = (title, metrics) => {
+        const section = el("section", { class: "flat-section" });
+        const head = el("div", { class: "flat-head" });
+        head.appendChild(el("strong", { text: title }));
+        section.appendChild(head);
+        const grid = el("div", { class: "flat-grid" });
+        for (const item of metrics) grid.appendChild(flatMetric(item.label, item.value));
+        section.appendChild(grid);
+        return section;
+      };
 
-        // Progress
-        const pctVal = (total > 0) ? Math.round((done / total) * 100) : 0;
-        const prog = el("div", { class: "progress-section" });
-        const progHead = el("div", { class: "progress-header" });
-        progHead.appendChild(el("span", { text: "进度" }));
-        progHead.appendChild(el("span", { text: `${pctVal}%` }));
-        prog.appendChild(progHead);
+      for (const p of projects) {
+        const card = el("article", { class: "project-card" });
+        const projectName = displayProjectName(p) || p.project_id;
+        const projectId = String((p && p.project_id) || "").trim();
+        const starred = isProjectStarred(projectId);
+        const titleRow = el("div", { class: "project-title-row" });
+        const title = el("h3", { class: "project-title" });
+        title.appendChild(el("a", { class: "project-title-link", text: projectName, href: toTaskUrl(p.project_id, "") }));
+        titleRow.appendChild(title);
+        const starBtn = el("button", {
+          class: "project-star-btn" + (starred ? " is-starred" : ""),
+          type: "button",
+          "aria-pressed": starred ? "true" : "false",
+          "aria-label": starred ? `取消标星 ${projectName}` : `标星 ${projectName}`,
+          title: starred ? "取消标星" : "标星置顶",
+          html: starred ? "★" : "☆",
+        });
+        starBtn.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          toggleProjectStar(projectId);
+        });
+        titleRow.appendChild(starBtn);
+        card.appendChild(titleRow);
 
-        const bar = el("div", { class: "progress-bar" });
-        bar.appendChild(el("div", { class: "progress-fill" + (pctVal >= 100 ? " full" : ""), style: `width:${pctVal}%` }));
-        prog.appendChild(bar);
-        body.appendChild(prog);
+        const totals = (p && typeof p.totals === "object") ? p.totals : {};
+        const channelsData = Array.isArray(p && p.channels_data) ? p.channels_data : [];
+        const divisionCount = channelsData.length || num(totals.channels);
+        const configuredAgentCount = channelsData.filter((item) => !!(item && item.session_configured)).length;
+        card.appendChild(flatSection("任务", [
+          { label: "进行中", value: formatCount(totals.in_progress) },
+          { label: "待开始", value: formatCount(totals.todo) },
+          { label: "已完成", value: formatCount(totals.done) },
+        ]));
 
-        card.appendChild(body);
+        const messageMetrics = messageMetricForProject(p.project_id);
+        card.appendChild(flatSection("Agent", [
+          { label: "分工", value: formatCount(divisionCount) },
+          { label: "Agent", value: formatCount(configuredAgentCount || divisionCount) },
+          { label: "消息", value: messageLoaded ? formatCount(messageMetrics.messages24h) : "—" },
+        ]));
+
         list.appendChild(card);
       }
     }
 
+    renderStats();
     renderCards();
+
+    (function initOverviewActivity() {
+      if (ACTIVITY.loading || ACTIVITY.loaded) return;
+      ACTIVITY.loading = true;
+      fetchRecentOverviewRuns(7, 6, 200)
+        .then((runs) => {
+          ACTIVITY.runs = Array.isArray(runs) ? runs : [];
+          ACTIVITY.loaded = true;
+          ACTIVITY.error = "";
+        })
+        .catch((err) => {
+          ACTIVITY.runs = [];
+          ACTIVITY.loaded = false;
+          ACTIVITY.error = err ? String(err.message || err) : "activity_load_failed";
+        })
+        .finally(() => {
+          ACTIVITY.loading = false;
+          renderStats();
+          renderCards();
+      });
+    })();
+
+    (function initProjectBootstrapControls() {
+      const openBtn = document.getElementById("newProjectBtn");
+      const closeBtn = document.getElementById("projectBootstrapCloseBtn");
+      const mask = document.getElementById("projectBootstrapMask");
+      const addChannelBtn = document.getElementById("projectBootstrapAddChannelBtn");
+      const submitBtn = document.getElementById("projectBootstrapSubmitBtn");
+      const resetBtn = document.getElementById("projectBootstrapResetBtn");
+      const reloadBtn = document.getElementById("projectBootstrapReloadBtn");
+      const projectRootInput = document.getElementById("projectBootstrapProjectRoot");
+      const taskRootInput = document.getElementById("projectBootstrapTaskRoot");
+      const generateRegistryInput = document.getElementById("projectBootstrapGenerateRegistry");
+      const visibilityInput = document.getElementById("projectBootstrapRunVisibilityCheck");
+
+      const openDrawer = () => {
+        setCfgOpened(false);
+        setWorklogOpened(false);
+        setProjectBootstrapOpened(true);
+        window.setTimeout(() => {
+          document.getElementById("projectBootstrapProjectId")?.focus();
+        }, 30);
+      };
+      const closeDrawer = () => setProjectBootstrapOpened(false);
+      const syncVisibilityOption = () => {
+        if (!visibilityInput || !generateRegistryInput) return;
+        visibilityInput.disabled = !generateRegistryInput.checked;
+        if (!generateRegistryInput.checked) visibilityInput.checked = false;
+      };
+
+      resetProjectBootstrapForm();
+      syncVisibilityOption();
+
+      if (openBtn) openBtn.addEventListener("click", openDrawer);
+      if (closeBtn) closeBtn.addEventListener("click", closeDrawer);
+      if (mask) mask.addEventListener("click", closeDrawer);
+      if (addChannelBtn) {
+        addChannelBtn.addEventListener("click", () => {
+          PROJECT_BOOTSTRAP.channels.push(createProjectBootstrapChannel());
+          renderProjectBootstrapChannelList();
+        });
+      }
+      if (submitBtn) submitBtn.addEventListener("click", submitProjectBootstrap);
+      if (resetBtn) resetBtn.addEventListener("click", resetProjectBootstrapForm);
+      if (reloadBtn) reloadBtn.addEventListener("click", () => window.location.reload());
+      if (projectRootInput) {
+        projectRootInput.addEventListener("input", () => {
+          syncProjectBootstrapTaskRoot(false);
+        });
+      }
+      if (taskRootInput) {
+        taskRootInput.addEventListener("input", () => {
+          const defaultValue = defaultTaskRootRel(projectRootInput?.value || "");
+          const currentValue = String(taskRootInput.value || "").trim();
+          PROJECT_BOOTSTRAP.taskRootTouched = !!currentValue && currentValue !== defaultValue;
+        });
+      }
+      if (generateRegistryInput) {
+        generateRegistryInput.addEventListener("change", () => {
+          syncVisibilityOption();
+        });
+      }
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && PROJECT_BOOTSTRAP.opened) {
+          e.preventDefault();
+          closeDrawer();
+        }
+      });
+    })();
 
     // ========== Global Resource Graph (V1) ==========
     const GRAPH = {

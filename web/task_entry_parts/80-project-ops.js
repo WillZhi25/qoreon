@@ -5324,7 +5324,12 @@
     }
 
     function looksLikeSessionId(s) {
-      return /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(String(s || "").trim());
+      const text = String(s || "").trim();
+      if (!text) return false;
+      return (
+        /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(text)
+        || /^ses_[A-Za-z0-9]{8,128}$/.test(text)
+      );
     }
 
     // Session bindings (per project+channel) stored in .sessions/ directory (persistent).

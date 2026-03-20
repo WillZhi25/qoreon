@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Callable
-import uuid
 
 from task_dashboard.runtime.execution_profiles import normalize_execution_profile
 from task_dashboard.session_store import session_binding_is_available, session_binding_sort_key
+from task_dashboard.helpers import looks_like_session_id
 
 
 def _derive_context_binding_state(context_meta: Any, *, fallback_target: Any = None) -> str:
@@ -54,14 +54,7 @@ def _resolve_context_dir(raw: Any, *, fallback_root: Path | str | None = None) -
 
 
 def _looks_like_uuid_local(value: Any) -> bool:
-    text = str(value or "").strip()
-    if not text:
-        return False
-    try:
-        uuid.UUID(text)
-        return True
-    except Exception:
-        return False
+    return looks_like_session_id(str(value or ""))
 
 
 def _session_process_busy_best_effort(session_id: str, cli_type: str = "codex") -> bool:

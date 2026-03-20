@@ -29,13 +29,17 @@ def _safe_text(value: Any, max_len: int) -> str:
     return text
 
 
-def _normalize_claude_row_fields(store: Any, run_id: str, row: dict[str, Any]) -> bool:
-    if str(row.get("cliType") or row.get("cli_type") or "").strip().lower() != "claude":
+_TERMINAL_TEXT_CLIS = {"claude", "opencode"}
+
+
+def _normalize_terminal_text_row_fields(store: Any, run_id: str, row: dict[str, Any]) -> bool:
+    cli_type = str(row.get("cliType") or row.get("cli_type") or "").strip().lower()
+    if cli_type not in _TERMINAL_TEXT_CLIS:
         return False
     changed = False
     preview = str(row.get("lastPreview") or "").strip()
     if not preview:
-        preview = _safe_text(extract_terminal_message_from_file(store._paths(run_id)["log"], cli_type="claude"), 300)
+        preview = _safe_text(extract_terminal_message_from_file(store._paths(run_id)["log"], cli_type=cli_type), 300)
         if preview:
             row["lastPreview"] = preview
             changed = True
@@ -185,7 +189,7 @@ def list_runs_response(
         run_id = str(row.get("id") or "").strip()
         changed = False
         if run_id:
-            changed = _normalize_claude_row_fields(store, run_id, row) or changed
+            changed = _normalize_terminal_text_row_fields(store, run_id, row) or changed
         changed = _align_run_runtime_identity(
             row,
             environment_name=environment_name,
@@ -249,7 +253,7 @@ def get_run_detail_response(
     if log_preview and log_preview != str(meta.get("logPreview") or ""):
         meta["logPreview"] = log_preview
         meta_changed = True
-    if run_cli_type == "claude":
+    if run_cli_type in _TERMINAL_TEXT_CLIS:
         normalized_last = _safe_text(last, 300)
         if normalized_last and normalized_last != str(meta.get("lastPreview") or "").strip():
             meta["lastPreview"] = normalized_last

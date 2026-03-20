@@ -161,7 +161,7 @@
     function buildNewConvInitMessage(channelName) {
       const channelLabel = String(channelName || "").trim() || "当前通道";
       return [
-        "[小秘书] " + channelLabel,
+        "[Qoreon] " + channelLabel,
         "你将负责该通道的协作推进，请先按当前培训标准完成初始化：",
         "1) 项目配置 = 真源默认上下文；环境 / worktree / workdir / branch 以项目继承结果为准。",
         "2) Agent = 身份，session = 继承结果；不要把会话临时状态当成项目真源。",

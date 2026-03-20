@@ -7,7 +7,7 @@
     function buildBootstrapVisibleMessages(channelName) {
       const ch = String(channelName || "").trim() || "当前通道";
       const dialog = channelDialogType(ch);
-      const msg1 = "[小秘书] " + ch + "（" + dialog.full + "）";
+      const msg1 = "[Qoreon] " + ch + "（" + dialog.full + "）";
       const msg2 = "【连通性验收】通道：" + ch + "；对话类型：" + dialog.full + "。请仅回复：OK（" + ch + "-" + dialog.short + "）";
       return [msg1, msg2];
     }
@@ -146,7 +146,7 @@
 
         if (mode === "attach") {
           if (!looksLikeSessionId(sidFromInput)) {
-            newConvModalError("Session ID 格式不正确（需要 UUID）。");
+            newConvModalError("Session ID 格式不正确（支持 UUID 或 ses_...）。");
             return;
           }
           const r = await fetch("/api/sessions", {

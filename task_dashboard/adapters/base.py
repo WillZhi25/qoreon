@@ -19,6 +19,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Optional
 
+from task_dashboard.local_cli_bins import get_local_cli_bin_override
+
 
 @dataclass(frozen=True)
 class CLIInfo:
@@ -41,27 +43,80 @@ class SessionInfo:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
-@lru_cache(maxsize=32)
-def resolve_cli_executable(command: str) -> str:
-    """
-    Resolve CLI executable path with service-safe fallbacks.
+def _normalize_explicit_cli_bin(value: str) -> str:
+    txt = str(value or "").strip()
+    if not txt:
+        return ""
+    if txt.startswith("~"):
+        return str(Path(txt).expanduser())
+    return txt
 
-    Some local service runners use a minimal PATH (/usr/bin:/bin:/usr/sbin:/sbin),
+
+@lru_cache(maxsize=32)
+def resolve_cli_executable_details(command: str) -> dict[str, Any]:
+    """
+    Resolve CLI executable path with launchd-safe fallbacks.
+
+    launchd often runs with a minimal PATH (/usr/bin:/bin:/usr/sbin:/sbin),
     so tools installed in /usr/local/bin or ~/.local/bin may be invisible.
     """
     cmd = str(command or "").strip()
     if not cmd:
-        return cmd
+        return {
+            "command": "",
+            "path": "",
+            "source": "empty",
+            "local_override": "",
+            "env_override": "",
+            "env_key": "",
+            "exists": False,
+            "executable": False,
+        }
+
+    local_override = _normalize_explicit_cli_bin(get_local_cli_bin_override(cmd))
+    if local_override:
+        local_path = Path(local_override).expanduser()
+        return {
+            "command": cmd,
+            "path": local_override,
+            "source": "local_config",
+            "local_override": local_override,
+            "env_override": "",
+            "env_key": "",
+            "exists": local_path.exists(),
+            "executable": os.access(local_path, os.X_OK),
+        }
 
     key_suffix = re.sub(r"[^A-Z0-9]+", "_", cmd.upper()).strip("_")
     env_key = f"TASK_DASHBOARD_{key_suffix}_BIN"
-    override = str(os.environ.get(env_key) or "").strip()
-    if override and Path(override).exists():
-        return override
+    override = _normalize_explicit_cli_bin(os.environ.get(env_key) or "")
+    if override:
+        override_path = Path(override).expanduser()
+        if override_path.exists() or ("/" not in override and "\\" not in override and shutil.which(override)):
+            return {
+                "command": cmd,
+                "path": override,
+                "source": "env",
+                "local_override": local_override,
+                "env_override": override,
+                "env_key": env_key,
+                "exists": override_path.exists() if ("/" in override or "\\" in override or override.startswith("~")) else bool(shutil.which(override)),
+                "executable": os.access(override_path, os.X_OK) if override_path.exists() else bool(shutil.which(override)),
+            }
 
     found = shutil.which(cmd)
     if found:
-        return found
+        found_path = Path(found)
+        return {
+            "command": cmd,
+            "path": found,
+            "source": "PATH",
+            "local_override": local_override,
+            "env_override": override,
+            "env_key": env_key,
+            "exists": found_path.exists(),
+            "executable": os.access(found_path, os.X_OK),
+        }
 
     extras = [
         str(Path.home() / ".local" / "bin"),
@@ -74,8 +129,31 @@ def resolve_cli_executable(command: str) -> str:
     for d in extras:
         p = Path(d) / cmd
         if p.exists() and os.access(p, os.X_OK):
-            return str(p)
-    return cmd
+            return {
+                "command": cmd,
+                "path": str(p),
+                "source": "extras",
+                "local_override": local_override,
+                "env_override": override,
+                "env_key": env_key,
+                "exists": True,
+                "executable": True,
+            }
+    return {
+        "command": cmd,
+        "path": cmd,
+        "source": "default",
+        "local_override": local_override,
+        "env_override": override,
+        "env_key": env_key,
+        "exists": False,
+        "executable": False,
+    }
+
+
+@lru_cache(maxsize=32)
+def resolve_cli_executable(command: str) -> str:
+    return str(resolve_cli_executable_details(command).get("path") or "").strip()
 
 
 class CLIAdapter(ABC):

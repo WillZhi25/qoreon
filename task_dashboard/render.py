@@ -99,6 +99,15 @@ def render_from_template(script_dir: Path, template_name: str, data: dict[str, A
             js = shared + "\n\n" + js
         tpl = tpl.replace("__INLINE_CSS__", css).replace("__INLINE_JS__", js)
         return tpl.replace("__PAYLOAD__", payload)
+    if template_name == "template_open_source_sync.html" and (web_dir / "open_source_sync.html.tpl").exists():
+        tpl = _read_text(web_dir / "open_source_sync.html.tpl")
+        css = _read_text(web_dir / "open_source_sync.css") if (web_dir / "open_source_sync.css").exists() else ""
+        shared = _read_text(web_dir / "shared.js") if (web_dir / "shared.js").exists() else ""
+        js = _read_text(web_dir / "open_source_sync.js") if (web_dir / "open_source_sync.js").exists() else ""
+        if shared:
+            js = shared + "\n\n" + js
+        tpl = tpl.replace("__INLINE_CSS__", css).replace("__INLINE_JS__", js)
+        return tpl.replace("__PAYLOAD__", payload)
     if template_name == "template_session_health.html" and (web_dir / "session_health.html.tpl").exists():
         tpl = _read_text(web_dir / "session_health.html.tpl")
         css = _read_text(web_dir / "session_health.css") if (web_dir / "session_health.css").exists() else ""

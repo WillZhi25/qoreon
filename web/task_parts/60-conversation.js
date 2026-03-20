@@ -39,6 +39,51 @@
       box.style.display = "none";
     }
 
+    function summarizeConversationLivePreview(rawText, maxLen = 120) {
+      const text = String(rawText || "").replace(/\r\n?/g, "\n").trim();
+      if (!text) return "";
+      const compact = text
+        .split("\n")
+        .map((line) => String(line || "").trim())
+        .filter(Boolean)
+        .join(" ");
+      if (!compact) return "";
+      return compact.length > maxLen ? (compact.slice(0, maxLen) + "…") : compact;
+    }
+
+    function buildConversationLiveRunHint(runs) {
+      const list = Array.isArray(runs) ? runs : [];
+      for (let i = list.length - 1; i >= 0; i -= 1) {
+        const run = list[i] || {};
+        const rid = String(run.id || "").trim();
+        if (!rid) continue;
+        const detail = PCONV.detailMap[rid] || null;
+        const st = String(getRunDisplayState(run, detail) || "").trim().toLowerCase();
+        if (!isWorkingLikeState(st)) continue;
+        const assistantText = stripInjectedConversationReplyText(resolveAssistantText(run, detail));
+        const processInfo = collectRunProcessInfo(rid, st, run, detail);
+        const preview = summarizeConversationLivePreview(firstNonEmptyText([
+          assistantText,
+          run.partialPreview,
+          run.lastPreview,
+          processInfo && processInfo.latest,
+        ]));
+        return {
+          runId: rid,
+          state: st,
+          preview,
+          latestProgressAt: String(firstNonEmptyText([
+            processInfo && processInfo.latestProgressAt,
+            run.lastProgressAt,
+            run.updatedAt,
+            run.updated_at,
+            run.createdAt,
+          ]) || "").trim(),
+        };
+      }
+      return null;
+    }
+
     function captureDebugLogScrollPositions(container) {
       if (!container) return;
       if (!PCONV.debugLogScrollTop) PCONV.debugLogScrollTop = Object.create(null);
@@ -615,39 +660,27 @@
 
       const cliChipName = ctx && ctx.cliType ? String(ctx.cliType).toUpperCase() : "Codex";
       const agentDisplay = firstNonEmptyText([ctx.agentName, ctx.displayChannel, ctx.alias]) || "未命名会话";
-      const channelsInfo = ctx.channels && ctx.channels.length > 0 ? ctx.channels.join(", ") : (ctx.channelName || "");
       const currentSession = findConversationSessionById(String(ctx.sessionId || ""));
       titleEl.innerHTML = "";
       const titleRow = el("div", { class: "detail-title-row" });
-      titleRow.appendChild(buildConversationAvatarNode(currentSession || ctx, { large: true }));
-      const titleStack = el("div", { class: "detail-title-stack" });
+      titleRow.appendChild(buildConversationAvatarNode(currentSession || ctx));
       const titleLine = el("div", { class: "detail-title-line" });
       titleLine.appendChild(el("span", { class: "detail-title-text", text: agentDisplay, title: agentDisplay }));
-      if (channelsInfo && channelsInfo !== agentDisplay) {
-        titleLine.appendChild(el("span", {
-          class: "detail-title-channel",
-          text: channelsInfo,
-          title: channelsInfo,
-        }));
-      }
-      titleStack.appendChild(titleLine);
-      const detailMetaRow = el("div", { class: "detail-title-meta" });
-      detailMetaRow.appendChild(buildConversationRoleBadge(currentSession || ctx));
-      detailMetaRow.appendChild(buildConversationCliBadge(currentSession || ctx, { detail: true }));
+      titleLine.appendChild(buildConversationRoleBadge(currentSession || ctx));
+      titleLine.appendChild(buildConversationCliBadge(currentSession || ctx, { detail: true }));
       const detailHeartbeatBadge = buildConversationHeartbeatBadges(currentSession || ctx);
-      if (detailHeartbeatBadge) detailMetaRow.appendChild(detailHeartbeatBadge);
+      if (detailHeartbeatBadge) titleLine.appendChild(detailHeartbeatBadge);
       const titleStatus = buildConversationStatusBadge(currentSession || ctx);
-      if (titleStatus) detailMetaRow.appendChild(titleStatus);
+      if (titleStatus) titleLine.appendChild(titleStatus);
       const sessionIdText = String(ctx.sessionId || "");
       if (sessionIdText) {
-        detailMetaRow.appendChild(el("span", {
+        titleLine.appendChild(el("span", {
           class: "detail-inline-id",
           text: sessionIdText,
           title: sessionIdText,
         }));
       }
-      titleStack.appendChild(detailMetaRow);
-      titleRow.appendChild(titleStack);
+      titleRow.appendChild(titleLine);
       titleEl.appendChild(titleRow);
       subEl.textContent = "";
       subEl.title = "";
@@ -699,6 +732,26 @@
         if (ta >= 0 && tb >= 0 && ta !== tb) return ta - tb; // oldest first (newest at bottom)
         return String(a.createdAt || "").localeCompare(String(b.createdAt || ""));
       });
+      const liveRunHint = buildConversationLiveRunHint(runs);
+      if (liveRunHint) {
+        const preview = String(liveRunHint.preview || "").trim();
+        const progressText = progressElapsedText(liveRunHint.latestProgressAt);
+        const hintParts = [
+          "当前 Agent 正在回复",
+          wasNearBottom ? "最新输出已生成" : "底部有新输出",
+        ];
+        if (preview) hintParts.push("预览：" + preview);
+        if (progressText && progressText !== "-") hintParts.push("更新于" + progressText);
+        if (liveRunHint.runId) hintParts.push("活跃 run: " + shortId(liveRunHint.runId));
+        hintEl.textContent = hintParts.join(" · ");
+        hintEl.title = [
+          "当前 Agent 正在回复",
+          liveRunHint.runId ? ("run: " + liveRunHint.runId) : "",
+          preview ? ("最新输出预览: " + preview) : "",
+        ].filter(Boolean).join("\n");
+      } else {
+        hintEl.title = "";
+      }
       renderConversationQuickTips(ctx, runs);
       refreshConversationRecentAgentsFromRuns(ctx, runs);
       renderConvComposerRunActions(ctx, runs);

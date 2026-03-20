@@ -17,19 +17,27 @@ from task_dashboard.cli import main
 
 
 if __name__ == "__main__":
+    # Config still resolves from the xiaomishu workspace root, but build outputs must
+    # follow the current repo/worktree instead of always writing into stable/dist.
     script_path = Path(__file__).resolve()
     repo_root = script_path.parent
-    default_out_task = str(Path("dist") / "project-task-dashboard.html")
-    default_out_overview = str(Path("dist") / "project-overview-dashboard.html")
-    default_out_communication = str(Path("dist") / "project-communication-audit.html")
-    default_out_status_report = str(Path("dist") / "project-status-report.html")
-    default_out_agent_directory = str(Path("dist") / "project-agent-directory.html")
-    default_out_agent_curtain = str(Path("dist") / "project-agent-curtain.html")
-    default_out_agent_relationship_board = str(Path("dist") / "project-agent-relationship-board.html")
-    default_out_session_health = str(Path("dist") / "project-session-health-dashboard.html")
+    workspace_root = repo_root.parents[2]
+    try:
+        repo_rel = repo_root.relative_to(workspace_root)
+    except Exception:
+        repo_rel = Path(repo_root.name)
+    default_out_task = str(repo_rel / "dist" / "project-task-dashboard.html")
+    default_out_overview = str(repo_rel / "dist" / "project-overview-dashboard.html")
+    default_out_communication = str(repo_rel / "dist" / "project-communication-audit.html")
+    default_out_status_report = str(repo_rel / "dist" / "project-status-report.html")
+    default_out_open_source_sync = str(repo_rel / "dist" / "project-open-source-sync-board.html")
+    default_out_agent_directory = str(repo_rel / "dist" / "project-agent-directory.html")
+    default_out_agent_curtain = str(repo_rel / "dist" / "project-agent-curtain.html")
+    default_out_agent_relationship_board = str(repo_rel / "dist" / "project-agent-relationship-board.html")
+    default_out_session_health = str(repo_rel / "dist" / "project-session-health-dashboard.html")
     forwarded = [
         "--root",
-        str(repo_root),
+        str(workspace_root),
         "--out-task",
         default_out_task,
         "--out-overview",
@@ -38,6 +46,8 @@ if __name__ == "__main__":
         default_out_communication,
         "--out-status-report",
         default_out_status_report,
+        "--out-open-source-sync",
+        default_out_open_source_sync,
         "--out-agent-directory",
         default_out_agent_directory,
         "--out-agent-curtain",

@@ -1,0 +1,72 @@
+{
+  "page": {
+    "title": "Qoreon Release Sync Board",
+    "subtitle": "A compact view for bootstrap, candidate refresh, and local preview status."
+  },
+  "hero": {
+    "kicker": "Public Candidate Flow",
+    "headline": "Bootstrap -> Build -> Preview -> Release Candidate",
+    "summary": "This board tracks the public candidate workflow inside the qoreon repository. It is intentionally minimal and does not expose private bridge details."
+  },
+  "version_board": {
+    "private_repo_path": ".",
+    "freeze_ref": "HEAD",
+    "public_repo_path": ".",
+    "private_label": "Current Candidate",
+    "freeze_label": "Frozen Snapshot",
+    "public_label": "Published View"
+  },
+  "summary_cards": [
+    {
+      "label": "Current Mode",
+      "value": "Public Candidate",
+      "detail": "This repository is the public-facing candidate package for Qoreon.",
+      "tone": "good"
+    },
+    {
+      "label": "Bootstrap Path",
+      "value": "3-step flow",
+      "detail": "Run bootstrap, build static pages, then preview locally.",
+      "tone": "accent"
+    }
+  ],
+  "major_timeline": [
+    {
+      "step": "1",
+      "title": "Bootstrap Example Project",
+      "status": "done",
+      "detail": "Validate seeds and materialize demo runtime directories."
+    },
+    {
+      "step": "2",
+      "title": "Build Static Pages",
+      "status": "doing",
+      "detail": "Generate the task dashboard, status report, and release views."
+    },
+    {
+      "step": "3",
+      "title": "Verify Local Preview",
+      "status": "todo",
+      "detail": "Check __health, task dashboard, and status report in demo mode."
+    },
+    {
+      "step": "4",
+      "title": "Publish Candidate",
+      "status": "todo",
+      "detail": "Tag the validated candidate and prepare remote publication."
+    }
+  ],
+  "repo_targets": [
+    {
+      "label": "qoreon",
+      "path": ".",
+      "role": "public candidate repo",
+      "note": "Public repository root used for bootstrap, build, and preview."
+    }
+  ],
+  "alignment_rules": [
+    "Keep public-only materials inside qoreon.",
+    "Use bootstrap_public_example.py as the bootstrap entry.",
+    "Validate build and preview before tagging a new candidate."
+  ]
+}

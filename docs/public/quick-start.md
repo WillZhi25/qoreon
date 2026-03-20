@@ -7,6 +7,14 @@
 
 ## 2. 生成页面
 
+先执行公开版最小初始化：
+
+```bash
+python3 scripts/bootstrap_public_example.py
+```
+
+再生成页面：
+
 ```bash
 python3 build_project_task_dashboard.py
 ```
@@ -27,7 +35,7 @@ python3 server.py --port 18770
 
 ## 5. 如果要让 AI 接手
 
-直接把 `docs/public/ai-bootstrap.md` 发给 AI，并要求它先读取：
+直接把 `docs/public/ai-bootstrap.md` 发给 AI，并要求它先执行 bootstrap，再读取：
 
 - `AGENTS.md`
 - `examples/minimal-project/README.md`

@@ -1838,7 +1838,7 @@
       if ((userVisualMode.kind === "collab-inbound" || userVisualMode.kind === "receipt-inbound") && !isAgentInbound) {
         userMeta.appendChild(el("span", {
           class: "msg-collab-badge" + (userVisualMode.kind === "receipt-inbound" ? " receipt" : ""),
-          text: userVisualMode.kind === "receipt-inbound" ? "协作回执" : "协作来信",
+          text: userVisualMode.kind === "receipt-inbound" ? "收到回执" : "协作来信",
         }));
         const sourceLabel = String(userVisualMode.sourceChannel || "").trim();
         const senderLabel = String((userSender && userSender.label) || "").trim();

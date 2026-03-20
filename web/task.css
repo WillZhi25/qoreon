@@ -77,7 +77,7 @@
       grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
       align-items: center;
       gap: 14px;
-      padding: 14px 18px;
+      padding: 10px 16px;
       border-bottom: 1px solid var(--line);
       background: rgba(255,255,255,0.42);
       backdrop-filter: blur(12px);
@@ -86,7 +86,7 @@
       min-width: 0;
       display: flex;
       align-items: center;
-      gap: 14px;
+      gap: 12px;
       justify-self: start;
     }
     .back-link {
@@ -95,30 +95,52 @@
       gap: 6px;
       color: var(--muted);
       text-decoration: none;
-      padding: 8px 12px;
+      padding: 6px 10px;
       border-radius: 12px;
       transition: 150ms ease;
+      flex: 0 0 auto;
+      white-space: nowrap;
     }
     .back-link:hover { background: rgba(0,0,0,0.05); color: var(--text); }
     .back-link svg { flex-shrink: 0; }
-    .back-link span { font-size: 13px; font-weight: 600; }
-    .project-info { min-width: 0; display: flex; flex-direction: column; }
+    .back-link span {
+      font-size: 13px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .project-info {
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      overflow-x: auto;
+      overflow-y: hidden;
+      scrollbar-width: thin;
+    }
     .project-meta-row {
       display: flex;
       align-items: center;
       gap: 10px;
       min-width: 0;
+      flex: 0 0 auto;
     }
     .project-title {
       font-family: var(--serif);
-      font-size: 18px;
+      font-size: 17px;
       font-weight: 900;
       margin: 0;
+      white-space: nowrap;
+      overflow: visible;
+      text-overflow: clip;
+      flex: 0 0 auto;
+    }
+    .project-desc {
+      font-size: 12px;
+      color: var(--muted);
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
     }
-    .project-desc { font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .env-chip {
       flex: 0 0 auto;
       display: inline-flex;
@@ -217,26 +239,26 @@
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      padding: 6px;
-      border-radius: 18px;
+      padding: 4px;
+      border-radius: 16px;
       border: 1px solid rgba(0,0,0,0.06);
       background: rgba(255,255,255,0.58);
       box-shadow: inset 0 1px 0 rgba(255,255,255,0.82);
       overflow-x: auto;
     }
     .header-mode-btn {
-      min-width: 88px;
-      height: 40px;
-      padding: 0 14px;
+      min-width: 80px;
+      height: 34px;
+      padding: 0 12px;
       border: 1px solid transparent;
-      border-radius: 14px;
+      border-radius: 12px;
       background: transparent;
       color: rgba(0,0,0,0.62);
       display: inline-flex;
       align-items: center;
       justify-content: center;
       gap: 8px;
-      font-size: 14px;
+      font-size: 13px;
       font-weight: 800;
       cursor: pointer;
       transition: 140ms ease;
@@ -290,13 +312,13 @@
       display: inline-flex;
       align-items: center;
       gap: 8px;
-      min-height: 40px;
-      padding: 0 14px;
-      border-radius: 14px;
+      min-height: 34px;
+      padding: 0 12px;
+      border-radius: 12px;
       border: 1px solid rgba(0,0,0,0.10);
       background: rgba(255,255,255,0.82);
       color: rgba(0,0,0,0.76);
-      font-size: 13px;
+      font-size: 12px;
       font-weight: 700;
       cursor: pointer;
       transition: 140ms ease;
@@ -317,8 +339,8 @@
     .system-settings-count {
       display: inline-flex;
       align-items: center;
-      min-height: 20px;
-      padding: 0 8px;
+      min-height: 18px;
+      padding: 0 7px;
       border-radius: 999px;
       background: rgba(47,111,237,0.10);
       color: var(--accent);
@@ -3226,13 +3248,13 @@
     }
     .back-to-list:hover { background: rgba(0,0,0,0.08); }
     .detailh {
-      padding: 14px 16px;
+      padding: 10px 12px;
       border-bottom: 1px solid var(--line);
       flex-shrink: 0;
       display: grid;
       grid-template-columns: minmax(0, 1fr) auto;
-      align-items: start;
-      gap: 8px 10px;
+      align-items: center;
+      gap: 8px;
     }
     .detailh-main { min-width: 0; }
     .detailh-actions {
@@ -3241,7 +3263,6 @@
       justify-content: flex-end;
       gap: 6px;
       flex-shrink: 0;
-      margin-top: 2px;
       min-width: max-content;
     }
     .detailh .dk {
@@ -3252,11 +3273,11 @@
       color: var(--muted);
     }
     .detailh .dt {
-      margin-top: 6px;
+      margin-top: 0;
       font-family: var(--serif);
       font-weight: 900;
-      font-size: 18px;
-      line-height: 1.22;
+      font-size: 16px;
+      line-height: 1.2;
       overflow-wrap: anywhere;
     }
     .detailh .dt .typeicon-badge {
@@ -3266,30 +3287,44 @@
       margin-top: 1px;
     }
     .detailh .dt .typeicon-badge .g { font-size: 13px; }
+    .detailh .conv-avatar {
+      width: 30px;
+      height: 30px;
+      border-radius: 10px;
+      font-size: 14px;
+    }
+    .detailh .conv-avatar.assigned {
+      font-size: 15px;
+    }
     .detail-title-row {
       display: flex;
-      align-items: flex-start;
-      gap: 12px;
+      align-items: center;
+      gap: 10px;
       min-width: 0;
     }
-    .detail-title-stack {
-      min-width: 0;
-      display: grid;
-      gap: 6px;
-    }
+    .detail-title-line,
     .detail-title-meta {
       display: flex;
       align-items: center;
       gap: 6px;
-      flex-wrap: wrap;
+      flex-wrap: nowrap;
       min-width: 0;
+      overflow-x: auto;
+      overflow-y: hidden;
+      white-space: nowrap;
+      scrollbar-width: thin;
     }
+    .detail-title-line::-webkit-scrollbar,
+    .detail-title-meta::-webkit-scrollbar { height: 4px; }
     .detail-title-text {
-      overflow-wrap: anywhere;
       min-width: 0;
-      font-size: 18px;
-      line-height: 1.22;
+      font-size: 16px;
+      line-height: 1.2;
       font-weight: 900;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      flex: 0 1 auto;
     }
     .detail-title-id {
       font-family: var(--mono);
@@ -3368,7 +3403,7 @@
       opacity: 0.72;
     }
     .detailb {
-      padding: 14px 16px;
+      padding: 10px 12px;
       overflow: auto;
       display: flex;
       flex-direction: column;
@@ -3419,47 +3454,41 @@
 
     /* 对话区块 */
     body.panel-conv .detailh {
-      padding: 10px 12px 8px;
+      padding: 8px 12px;
     }
     body.panel-conv .detailh .dk { display: none; }
+    body.panel-conv .detailh .conv-avatar {
+      width: 26px;
+      height: 26px;
+      border-radius: 9px;
+      font-size: 13px;
+    }
+    body.panel-conv .detailh .conv-avatar.assigned {
+      font-size: 14px;
+    }
     body.panel-conv .detailh-main {
       display: flex;
-      align-items: baseline;
-      gap: 10px;
+      align-items: center;
+      gap: 0;
       min-width: 0;
       width: 100%;
-      overflow-x: auto;
-      overflow-y: hidden;
-      white-space: nowrap;
-      scrollbar-width: thin;
     }
-    body.panel-conv .detailh-main::-webkit-scrollbar { height: 4px; }
     body.panel-conv .detailh .dt {
       margin: 0;
-      font-size: 18px;
+      font-size: 16px;
       line-height: 1.2;
-      white-space: nowrap;
-      overflow: visible;
-      text-overflow: clip;
-      min-width: max-content;
-      flex: 0 0 auto;
+      min-width: 0;
     }
-    body.panel-conv .detailh .dsub {
-      margin: 0;
-      font-size: 11px;
-      max-width: 52%;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      flex: 0 1 auto;
-      display: none;
-    }
+    body.panel-conv .detailh .dsub { display: none; }
     body.panel-conv .detailh .dpathbar { display: none !important; }
     body.panel-conv #detailMeta,
     body.panel-conv #detailExcerpt,
     body.panel-conv #detailMore,
     body.panel-conv #ccbBox { display: none !important; }
-    body.panel-conv .detailb { overflow: hidden; }
+    body.panel-conv .detailb {
+      padding: 0;
+      overflow: hidden;
+    }
     body.panel-conv .detailb > .convwrap { flex: 1 1 auto; }
     .convwrap {
       display: none;
@@ -3470,6 +3499,10 @@
       gap: 10px;
     }
     .convwrap.show { display: grid; }
+    body.panel-conv .convwrap {
+      padding: 0;
+      gap: 0;
+    }
     .convtimeline {
       min-height: 0;
       overflow: auto;
@@ -3480,6 +3513,33 @@
       display: flex;
       flex-direction: column;
       gap: 10px;
+    }
+    body.panel-conv .convtimeline {
+      border-left: none;
+      border-right: none;
+      border-top: none;
+      border-radius: 0;
+      padding: 10px 12px 6px;
+    }
+    body.panel-conv .convcomposer {
+      margin-top: 0;
+      border-left: none;
+      border-right: none;
+      border-bottom: none;
+      border-radius: 0;
+      padding: 8px 12px 10px;
+    }
+    body.panel-conv #detailFilesBtn,
+    body.panel-conv #detailMemoBtn {
+      min-width: 32px;
+      min-height: 32px;
+      height: 32px;
+      padding: 0 8px;
+      gap: 5px;
+      justify-content: center;
+    }
+    body.panel-conv #detailMemoBtn {
+      padding: 0 7px;
     }
     .msgrow {
       display: flex;
@@ -4224,7 +4284,38 @@
       border-color: rgba(89,121,212,0.55);
       box-shadow: 0 0 0 2px rgba(89,121,212,0.16) inset;
     }
-    .convsend { display: flex; gap: 8px; align-items: flex-end; }
+    .convsend {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .convsend > .btn {
+      height: 36px;
+      min-height: 36px;
+      padding: 0 12px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      align-self: center;
+      line-height: 1;
+    }
+    .convsend #convUploadBtn {
+      width: 36px;
+      padding: 0;
+      font-size: 15px;
+    }
+    .convsend .msg-input-wrap {
+      display: flex;
+      align-items: center;
+      align-self: center;
+    }
+    .convsend .msg-input {
+      min-height: 36px;
+      height: 36px;
+      padding-top: 8px;
+      padding-bottom: 8px;
+      line-height: 20px;
+    }
     .memo-drawer-mask {
       position: absolute;
       inset: 0;
@@ -4387,6 +4478,7 @@
     .conv-file-drawer {
       width: min(560px, 96vw);
       background: rgba(255,255,255,0.985);
+      grid-template-rows: auto auto auto auto minmax(0, 1fr);
     }
     .conv-file-drawer .memo-drawer-head {
       background: rgba(255,255,255,0.98);

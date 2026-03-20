@@ -12,6 +12,7 @@ from urllib.parse import quote
 
 from .config import load_dashboard_config
 from .model import Item
+from .open_source_sync import build_open_source_sync_page_data
 from .overview import build_overview
 from .parser_md import iter_items
 from .project_source import resolve_project_source
@@ -67,15 +68,6 @@ def _resolve_optional_path(root: Path, raw: str) -> Path | None:
         return None
     path = Path(value)
     return path.resolve() if path.is_absolute() else (root / value).resolve()
-
-
-def _public_display_path(root: Path, path: Path | None) -> str:
-    if path is None:
-        return ""
-    try:
-        return str(path.resolve().relative_to(root.resolve()))
-    except Exception:
-        return ""
 
 
 def _resolve_project_runs_root(root: Path, project_cfg: dict[str, Any]) -> Path | None:
@@ -290,7 +282,7 @@ def _build_agent_directory_summary(
     return {
         "today": today,
         "generated_at": iso_now_local(),
-        "runs_root": _public_display_path(root, runs_root),
+        "runs_root": str(runs_root) if runs_root else "",
         "today_run_count": today_run_count,
         "active_agent_total": len(active_session_ids),
         "active_today_agents": active_today_agents,
@@ -430,49 +422,55 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--out-task",
         type=str,
-        default="dist/project-task-dashboard.html",
+        default="项目管理-小秘书/项目看板/task-dashboard/dist/project-task-dashboard.html",
         help="task page output html path (relative to root)",
     )
     ap.add_argument(
         "--out-overview",
         type=str,
-        default="dist/project-overview-dashboard.html",
+        default="项目管理-小秘书/项目看板/task-dashboard/dist/project-overview-dashboard.html",
         help="overview page output html path (relative to root)",
     )
     ap.add_argument(
         "--out-communication",
         type=str,
-        default="dist/project-communication-audit.html",
+        default="项目管理-小秘书/项目看板/task-dashboard/dist/project-communication-audit.html",
         help="communication audit page output html path (relative to root)",
     )
     ap.add_argument(
         "--out-session-health",
         type=str,
-        default="dist/project-session-health-dashboard.html",
+        default="项目管理-小秘书/项目看板/task-dashboard/dist/project-session-health-dashboard.html",
         help="session health page output html path (relative to root)",
     )
     ap.add_argument(
         "--out-status-report",
         type=str,
-        default="dist/project-status-report.html",
+        default="项目管理-小秘书/项目看板/task-dashboard/dist/project-status-report.html",
         help="status report page output html path (relative to root)",
+    )
+    ap.add_argument(
+        "--out-open-source-sync",
+        type=str,
+        default="项目管理-小秘书/项目看板/task-dashboard/dist/project-open-source-sync-board.html",
+        help="open-source sync board output html path (relative to root)",
     )
     ap.add_argument(
         "--out-agent-directory",
         type=str,
-        default="dist/project-agent-directory.html",
+        default="项目管理-小秘书/项目看板/task-dashboard/dist/project-agent-directory.html",
         help="agent directory page output html path (relative to root)",
     )
     ap.add_argument(
         "--out-agent-curtain",
         type=str,
-        default="dist/project-agent-curtain.html",
+        default="项目管理-小秘书/项目看板/task-dashboard/dist/project-agent-curtain.html",
         help="agent curtain page output html path (relative to root)",
     )
     ap.add_argument(
         "--out-agent-relationship-board",
         type=str,
-        default="dist/project-agent-relationship-board.html",
+        default="项目管理-小秘书/项目看板/task-dashboard/dist/project-agent-relationship-board.html",
         help="agent relationship board page output html path (relative to root)",
     )
     ap.add_argument(
@@ -495,6 +493,9 @@ def main(argv: list[str] | None = None) -> int:
     status_report_page_link = str(
         os.environ.get("TASK_DASHBOARD_STATUS_REPORT_PAGE_LINK") or "project-status-report.html"
     ).strip() or "project-status-report.html"
+    open_source_sync_page_link = str(
+        os.environ.get("TASK_DASHBOARD_OPEN_SOURCE_SYNC_PAGE_LINK") or "project-open-source-sync-board.html"
+    ).strip() or "project-open-source-sync-board.html"
     agent_directory_page_link = str(
         os.environ.get("TASK_DASHBOARD_AGENT_DIRECTORY_PAGE_LINK") or "project-agent-directory.html"
     ).strip() or "project-agent-directory.html"
@@ -514,6 +515,7 @@ def main(argv: list[str] | None = None) -> int:
     out_overview_path = (root / args.out_overview).resolve()
     out_communication_path = (root / args.out_communication).resolve()
     out_status_report_path = (root / args.out_status_report).resolve()
+    out_open_source_sync_path = (root / args.out_open_source_sync).resolve()
     out_agent_directory_path = (root / args.out_agent_directory).resolve()
     out_agent_relationship_board_path = (root / args.out_agent_relationship_board).resolve()
     out_session_health_path = (root / args.out_session_health).resolve()
@@ -522,6 +524,7 @@ def main(argv: list[str] | None = None) -> int:
     out_overview_path.parent.mkdir(parents=True, exist_ok=True)
     out_communication_path.parent.mkdir(parents=True, exist_ok=True)
     out_status_report_path.parent.mkdir(parents=True, exist_ok=True)
+    out_open_source_sync_path.parent.mkdir(parents=True, exist_ok=True)
     out_agent_directory_path.parent.mkdir(parents=True, exist_ok=True)
     out_agent_relationship_board_path.parent.mkdir(parents=True, exist_ok=True)
     out_session_health_path.parent.mkdir(parents=True, exist_ok=True)
@@ -927,6 +930,7 @@ def main(argv: list[str] | None = None) -> int:
             "overview_page": overview_page_link,
             "communication_page": communication_page_link,
             "status_report_page": status_report_page_link,
+            "open_source_sync_page": open_source_sync_page_link,
             "agent_directory_page": agent_directory_page_link,
             "agent_curtain_page": agent_curtain_page_link,
             "agent_relationship_board_page": agent_relationship_board_page_link,
@@ -937,6 +941,7 @@ def main(argv: list[str] | None = None) -> int:
         "agent_relationship_board_page": agent_relationship_board_page_link,
         "communication_page": communication_page_link,
         "status_report_page": status_report_page_link,
+        "open_source_sync_page": open_source_sync_page_link,
         "session_health_page": session_health_page_link,
         "overview": overview_data,
     }
@@ -973,7 +978,7 @@ def main(argv: list[str] | None = None) -> int:
         },
         "task_page": task_page_link,
         "agent_curtain_page": agent_curtain_page_link,
-        "environment": str(os.environ.get("TASK_DASHBOARD_ENV_NAME") or "demo").strip() or "demo",
+        "environment": str(os.environ.get("TASK_DASHBOARD_ENV_NAME") or "stable").strip() or "stable",
         "overview": overview_data,
     }
     agent_relationship_board_page_data: dict[str, Any] = {
@@ -991,7 +996,7 @@ def main(argv: list[str] | None = None) -> int:
         "task_page": task_page_link,
         "agent_curtain_page": agent_curtain_page_link,
         "agent_relationship_board_page": agent_relationship_board_page_link,
-        "environment": str(os.environ.get("TASK_DASHBOARD_ENV_NAME") or "demo").strip() or "demo",
+        "environment": str(os.environ.get("TASK_DASHBOARD_ENV_NAME") or "stable").strip() or "stable",
         "overview": overview_data,
     }
     communication_page_data: dict[str, Any] = {
@@ -1001,7 +1006,7 @@ def main(argv: list[str] | None = None) -> int:
         "communication_page": communication_page_link,
         "status_report_page": status_report_page_link,
         "session_health_page": session_health_page_link,
-        "environment": str(os.environ.get("TASK_DASHBOARD_ENV_NAME") or "demo").strip() or "demo",
+        "environment": str(os.environ.get("TASK_DASHBOARD_ENV_NAME") or "stable").strip() or "stable",
     }
     session_health_page_data = build_session_health_page(
         projects_meta,
@@ -1023,6 +1028,12 @@ def main(argv: list[str] | None = None) -> int:
         dashboard=task_data["dashboard"],
         links=task_data["links"],
     )
+    open_source_sync_page_data = build_open_source_sync_page_data(
+        script_dir,
+        generated_at=task_data["generated_at"],
+        dashboard=task_data["dashboard"],
+        links=task_data["links"],
+    )
 
     task_html = render_from_template(script_dir, "template.html", task_data)
     out_task_path.write_text(task_html, encoding="utf-8")
@@ -1039,6 +1050,14 @@ def main(argv: list[str] | None = None) -> int:
     status_report_html = render_from_template(script_dir, "template_status_report.html", status_report_page_data)
     out_status_report_path.write_text(status_report_html, encoding="utf-8")
     print(f"Wrote: {out_status_report_path}")
+
+    open_source_sync_html = render_from_template(
+        script_dir,
+        "template_open_source_sync.html",
+        open_source_sync_page_data,
+    )
+    out_open_source_sync_path.write_text(open_source_sync_html, encoding="utf-8")
+    print(f"Wrote: {out_open_source_sync_path}")
 
     agent_directory_html = render_from_template(script_dir, "template_agent_directory.html", agent_directory_page_data)
     out_agent_directory_path.write_text(agent_directory_html, encoding="utf-8")

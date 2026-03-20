@@ -8,6 +8,15 @@
   };
   const INTERVAL_OPTIONS = [15, 30, 60, 120, 240, 360, 720, 1440];
   const COPY_LABEL = Object.create(null);
+  const CLI_LABELS = {
+    codex: "Codex",
+    claude: "Claude Code",
+    gemini: "Gemini CLI",
+    opencode: "OpenCode",
+    trae: "Trae Agent CLI",
+  };
+  const SUPPORTED_HEALTH_TYPES = ["codex"];
+  const PLANNED_HEALTH_TYPES = ["claude", "gemini", "opencode", "trae"];
   const LIVE = {
     rows: null,
     syncAt: "",
@@ -157,6 +166,11 @@
       minute: "2-digit",
       hour12: false,
     }).format(new Date(ts));
+  }
+
+  function cliLabel(value) {
+    const key = String(value || "").trim().toLowerCase();
+    return CLI_LABELS[key] || (key ? key : "未识别");
   }
 
   function intervalLabel(minutes) {
@@ -679,6 +693,50 @@
     }));
   }
 
+  function renderSupportMatrix() {
+    const wrap = document.getElementById("supportMatrix");
+    if (!wrap) return;
+    const observed = Array.from(new Set(
+      activeSessions()
+        .map((row) => String(row && row.cli_type || "").trim().toLowerCase())
+        .filter(Boolean)
+    ));
+    const observedText = observed.length
+      ? observed.map((item) => cliLabel(item)).join(" / ")
+      : "当前项目暂无会话";
+    const unsupportedObserved = observed.filter((item) => !SUPPORTED_HEALTH_TYPES.includes(item));
+
+    wrap.innerHTML = "";
+    wrap.appendChild(el("div", { class: "capability-grid" }, [
+      el("section", { class: "capability-card current" }, [
+        el("span", { class: "capability-title", text: "当前支持自动健康判定" }),
+        el("p", { class: "capability-main", text: SUPPORTED_HEALTH_TYPES.map((item) => cliLabel(item)).join(" / ") }),
+        el("div", { class: "capability-note", text: "目前只有这些类型会自动读取日志，计算 compact、token_count、压缩后占用基线等健康指标。" }),
+      ]),
+      el("section", { class: "capability-card plan" }, [
+        el("span", { class: "capability-title", text: "后续计划支持" }),
+        el("p", { class: "capability-main", text: PLANNED_HEALTH_TYPES.map((item) => cliLabel(item)).join(" / ") }),
+        el("div", { class: "capability-note", text: "这些类型后续会接入各自稳定日志源，再纳入同一张健康页做自动判定。" }),
+      ]),
+      el("section", { class: "capability-card observed" }, [
+        el("span", { class: "capability-title", text: "当前项目已接入类型" }),
+        el("p", { class: "capability-main", text: observedText }),
+        el("div", {
+          class: "capability-note",
+          text: unsupportedObserved.length
+            ? `其中 ${unsupportedObserved.map((item) => cliLabel(item)).join(" / ")} 当前只做会话绑定展示，暂不自动计算健康分。`
+            : "当前项目里已接入的会话类型都已纳入自动健康判定。",
+        }),
+      ]),
+    ]));
+  }
+
+  function renderChrome() {
+    bindHeader();
+    renderSummaryLine();
+    renderSupportMatrix();
+  }
+
   function rawSessions() {
     return activeSessions();
   }
@@ -878,8 +936,7 @@
     } catch (err) {
       LIVE.error = (err && err.message) ? String(err.message) : "unknown";
     }
-    bindHeader();
-    renderSummaryLine();
+    renderChrome();
     renderTable();
   }
 
@@ -893,8 +950,7 @@
     } catch (err) {
       LIVE.error = (err && err.message) ? String(err.message) : "unknown";
     }
-    bindHeader();
-    renderSummaryLine();
+    renderChrome();
     renderTable();
   }
 
@@ -923,8 +979,7 @@
   async function refreshHealthData() {
     LIVE.syncing = true;
     LIVE.error = "";
-    bindHeader();
-    renderSummaryLine();
+    renderChrome();
     try {
       const resp = await fetch(healthEndpoint({ refresh: true }), { credentials: "same-origin", cache: "no-store" });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -937,8 +992,7 @@
     } finally {
       LIVE.syncing = false;
     }
-    bindHeader();
-    renderSummaryLine();
+    renderChrome();
     renderTable();
   }
 
@@ -949,7 +1003,7 @@
     const intervalMinutes = intervalSelect ? Number(intervalSelect.value || 120) : 120;
     LIVE.savingConfig = true;
     LIVE.error = "";
-    bindHeader();
+    renderChrome();
     try {
       const resp = await fetch(healthEndpoint(), {
         method: "POST",
@@ -981,13 +1035,11 @@
     } finally {
       LIVE.savingConfig = false;
     }
-    bindHeader();
-    renderSummaryLine();
+    renderChrome();
     renderTable();
   }
 
-  bindHeader();
-  renderSummaryLine();
+  renderChrome();
   bindFilters();
   renderTable();
   const refreshButton = document.getElementById("refreshButton");

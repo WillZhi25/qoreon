@@ -31,9 +31,34 @@
         s.session_display_state,
         s.sessionDisplayState,
       ]);
-      if (raw) return normalizeSessionDisplayState(raw, "idle");
       const runtimeState = getSessionRuntimeState(s);
-      return normalizeSessionDisplayState(runtimeState.display_state, "idle");
+      const rawState = normalizeSessionDisplayState(raw, "");
+      const runtimeDisplay = normalizeSessionDisplayState(runtimeState.display_state, "idle");
+      const latestRunSummary = getSessionLatestRunSummary(s);
+      const latestStatus = normalizeSessionDisplayState(latestRunSummary.status, "");
+      const isActiveLike = (one) => (
+        one === "running"
+        || one === "queued"
+        || one === "retry_waiting"
+        || one === "external_busy"
+      );
+
+      // 运行时显式态优先，避免旧的 session_display_state 把已恢复/已中断会话继续显示成处理中。
+      if (runtimeDisplay === "error" || isActiveLike(runtimeDisplay)) return runtimeDisplay;
+
+      if (isExplicitIdleRuntimeState(runtimeState)) {
+        if (isActiveLike(rawState)) {
+          if (latestStatus === "done" || latestStatus === "error") return latestStatus;
+          return "idle";
+        }
+        if (rawState === "done" || rawState === "error") return rawState;
+        if (latestStatus === "done" || latestStatus === "error") return latestStatus;
+        return "idle";
+      }
+
+      if (rawState) return rawState;
+      if (latestStatus === "done" || latestStatus === "error") return latestStatus;
+      return runtimeDisplay;
     }
 
     function getSessionDisplayReason(session) {

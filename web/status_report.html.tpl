@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>项目情况汇报 · 小秘书</title>
+  <title>项目情况汇报 · Qoreon</title>
   <style>__INLINE_CSS__</style>
 </head>
 <body>
@@ -23,6 +23,7 @@
     <nav class="quick-links" aria-label="快捷入口">
       <a class="link-chip" id="overviewLink" href="/share/project-overview-dashboard.html">项目总览</a>
       <a class="link-chip" id="taskLink" href="/share/project-task-dashboard.html">任务页</a>
+      <a class="link-chip" id="openSourceSyncLink" href="/share/project-open-source-sync-board.html">开源同步</a>
       <a class="link-chip" id="communicationLink" href="/share/project-communication-audit.html">通讯分析</a>
       <a class="link-chip" id="sessionHealthLink" href="/share/project-session-health-dashboard.html">会话健康</a>
     </nav>

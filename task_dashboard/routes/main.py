@@ -50,6 +50,9 @@ from task_dashboard.runtime.channel_admin import (
     resolve_task_root_path as runtime_resolve_task_root_path,
 )
 from task_dashboard.runtime.project_execution_context import build_project_execution_context
+from task_dashboard.runtime.project_admin import (
+    bootstrap_project_response as runtime_bootstrap_project_response,
+)
 from task_dashboard.runtime.execution_profiles import (
     normalize_execution_profile as runtime_normalize_execution_profile,
 )
@@ -204,6 +207,7 @@ class RouteContext:
     rebuild_dashboard_static: Callable[[int], dict[str, Any]] = field(repr=False)
     read_task_dashboard_generated_at: Callable[[], str] = field(repr=False)
     set_runtime_max_concurrency_in_config: Callable[[int], Path] = field(repr=False)
+    set_runtime_cli_bins_in_local_config: Callable[[dict[str, Any]], Path] = field(repr=False)
     communication_audit_scope_catalog: Callable[[Any], dict[str, dict[str, Any]]] = field(repr=False)
     parse_communication_audit_scopes: Callable[..., list[str]] = field(repr=False)
     get_communication_audit_summary: Callable[..., dict[str, Any]] = field(repr=False)
@@ -212,7 +216,7 @@ class RouteContext:
     default_project_id_from_cfg: Callable[[dict[str, Any]], str] = field(repr=False)
     resolve_effective_max_concurrency: Callable[..., tuple[int, str]] = field(repr=False)
     resolve_scheduler_engine_enabled: Callable[[], tuple[bool, str]] = field(repr=False)
-    collect_cli_tools_snapshot: Callable[..., list[dict[str, Any]]] = field(repr=False)
+    collect_cli_tools_snapshot: Callable[..., dict[str, Any]] = field(repr=False)
     runtime_cfg_max_concurrency_from_cfg: Callable[[dict[str, Any]], int | None] = field(repr=False)
     with_local_config_enabled: Callable[[], bool] = field(repr=False)
     resolve_allowed_fs_path: Callable[[str], Path] = field(repr=False)
@@ -241,6 +245,7 @@ class RouteContext:
     get_project_config_response: Callable[..., tuple[int, dict[str, Any]]] = field(repr=False)
     attach_auto_inspection_candidate_preview: Callable[..., dict[str, Any]] = field(repr=False)
     config_toml_path: Callable[[], Path] = field(repr=False)
+    config_local_toml_path: Callable[[], Path] = field(repr=False)
     load_project_auto_inspection_config: Callable[[str], dict[str, Any]] = field(repr=False)
     normalize_auto_inspection_tasks: Callable[..., list[dict[str, Any]]] = field(repr=False)
     normalize_inspection_task_id: Callable[..., str] = field(repr=False)
@@ -475,6 +480,10 @@ class RouteDispatcher:
 
         if path == "/api/sessions":
             self._handle_session_create_post(handler)
+            return True
+
+        if path == "/api/projects/bootstrap":
+            self._handle_project_bootstrap_post(handler)
             return True
 
         if path == "/api/dashboard/rebuild":
@@ -817,7 +826,7 @@ class RouteDispatcher:
             handler,
             200,
             {
-                    "global": {
+                "global": {
                         "max_concurrency": int(max_cc),
                         "max_concurrency_source": max_cc_source,
                         "configured_max_concurrency": self.ctx.runtime_cfg_max_concurrency_from_cfg(cfg),
@@ -826,6 +835,7 @@ class RouteDispatcher:
                         "token_required": bool(self.ctx.server_token()),
                         "with_local_config": self.ctx.with_local_config_enabled(),
                         "bind": bind_host,
+                        "cli_bins_config_path": str(self.ctx.config_local_toml_path()),
                         "cli_tools": cli_tools,
                     "limits": {"max_concurrency": {"min": 1, "max": 32}},
                 },
@@ -1697,33 +1707,54 @@ class RouteDispatcher:
             self.ctx.json_response(handler, 400, {"error": f"bad json: {e}"})
             return
         raw = body.get("max_concurrency") if "max_concurrency" in body else body.get("maxConcurrency")
-        if raw is None:
-            self.ctx.json_response(handler, 400, {"error": "missing max_concurrency"})
+        cli_bins_raw = body.get("cli_bins") if "cli_bins" in body else body.get("cliBins")
+        if raw is None and cli_bins_raw is None:
+            self.ctx.json_response(handler, 400, {"error": "missing max_concurrency/cli_bins"})
             return
+
+        max_concurrency: int | None = None
+        if raw is not None:
+            try:
+                max_concurrency = int(raw)
+            except Exception:
+                self.ctx.json_response(handler, 400, {"error": "invalid max_concurrency"})
+                return
+            if max_concurrency < 1 or max_concurrency > 32:
+                self.ctx.json_response(handler, 400, {"error": "max_concurrency out of range: 1..32"})
+                return
+
+        cli_bins_patch: dict[str, Any] = {}
+        if cli_bins_raw is not None:
+            if not isinstance(cli_bins_raw, dict):
+                self.ctx.json_response(handler, 400, {"error": "invalid cli_bins"})
+                return
+            cli_bins_patch = {str(k or ""): ("" if v is None else str(v)) for k, v in cli_bins_raw.items()}
+
+        config_path: Path | None = None
+        local_config_path: Path | None = None
         try:
-            max_concurrency = int(raw)
-        except Exception:
-            self.ctx.json_response(handler, 400, {"error": "invalid max_concurrency"})
-            return
-        if max_concurrency < 1 or max_concurrency > 32:
-            self.ctx.json_response(handler, 400, {"error": "max_concurrency out of range: 1..32"})
-            return
-        try:
-            config_path = self.ctx.set_runtime_max_concurrency_in_config(max_concurrency)
+            if max_concurrency is not None:
+                config_path = self.ctx.set_runtime_max_concurrency_in_config(max_concurrency)
+            if cli_bins_raw is not None:
+                local_config_path = self.ctx.set_runtime_cli_bins_in_local_config(cli_bins_patch)
         except Exception as e:
             self.ctx.json_response(handler, 400, {"error": str(e)})
             return
+        cfg = self.ctx.load_dashboard_cfg_current()
+        max_cc, max_cc_source = self.ctx.resolve_effective_max_concurrency(cfg=cfg)
         self.ctx.json_response(
             handler,
             200,
             {
                 "ok": True,
                 "global": {
-                    "max_concurrency": int(max_concurrency),
-                    "max_concurrency_source": "config",
-                    "requires_restart": True,
+                    "max_concurrency": int(max_cc),
+                    "max_concurrency_source": max_cc_source,
+                    "requires_restart": bool(max_concurrency is not None),
+                    "cli_tools": self.ctx.collect_cli_tools_snapshot(cfg, session_store=self.ctx.session_store),
                 },
-                "config_path": str(config_path),
+                "config_path": str(config_path) if config_path else "",
+                "local_config_path": str(local_config_path) if local_config_path else "",
             },
         )
 
@@ -2263,6 +2294,31 @@ class RouteDispatcher:
             heartbeat_runtime=self.ctx.heartbeat_runtime,
             store=self.ctx.store,
             default_inspection_targets=self.ctx.default_inspection_targets,
+        )
+        self.ctx.json_response(handler, code, payload)
+
+    def _handle_project_bootstrap_post(self, handler: "BaseHTTPRequestHandler") -> None:
+        """Handle POST /api/projects/bootstrap."""
+        if not self.ctx.require_token():
+            return
+        try:
+            body = self.ctx.read_body_json(handler, max_bytes=120_000)
+        except Exception as e:
+            self.ctx.json_response(handler, 400, {"error": f"bad json: {e}"})
+            return
+        code, payload = runtime_bootstrap_project_response(
+            body=body if isinstance(body, dict) else {},
+            config_path=self.ctx.config_toml_path(),
+            repo_root=self.ctx.repo_root(),
+            session_store=self.ctx.session_store,
+            create_cli_session=self.ctx.create_cli_session,
+            detect_git_branch=self.ctx.detect_git_branch,
+            build_session_seed_prompt=self.ctx.build_session_seed_prompt,
+            decorate_session_display_fields=self.ctx.decorate_session_display_fields,
+            apply_session_work_context=self.ctx.apply_session_work_context,
+            read_task_dashboard_generated_at=self.ctx.read_task_dashboard_generated_at,
+            rebuild_dashboard_static=self.ctx.rebuild_dashboard_static,
+            clear_dashboard_cfg_cache=runtime_clear_dashboard_cfg_cache,
         )
         self.ctx.json_response(handler, code, payload)
 

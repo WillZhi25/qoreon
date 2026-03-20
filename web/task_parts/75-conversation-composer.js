@@ -2458,9 +2458,12 @@
       sub.textContent = channelName + " · 共 " + items.length + " 个文件" + (starredCount ? (" · 收藏 " + starredCount) : "");
       renderConversationFileFilterBar(key, items);
       const selectedTypeText = activeTypes.map((it) => filterLabelMap[it] || it).join(" / ");
+      const defaultFilterEmpty = !onlyStarred && !filteredItems.length && items.length > 0;
       hint.textContent = onlyStarred
         ? ("当前仅展示已收藏文件；类型筛选：" + selectedTypeText + "。")
-        : ("默认仅看给人看的文件类型，当前筛选：" + selectedTypeText + "。");
+        : (defaultFilterEmpty
+            ? ("已识别到 " + items.length + " 个文件，但默认筛选「" + selectedTypeText + "」没有命中；点上方“全部”可查看全部文件。")
+            : ("默认仅看给人看的文件类型，当前筛选：" + selectedTypeText + "。"));
       onlyStarBtn.textContent = onlyStarred ? "查看全部" : "仅收藏";
       onlyStarBtn.classList.toggle("primary", onlyStarred);
       sortSelect.value = sortMode;
@@ -2475,7 +2478,7 @@
           class: "memo-empty",
           text: onlyStarred
             ? "当前筛选下没有已收藏文件。"
-            : "当前类型筛选下没有文件，试试点“全部”或放宽类型筛选。",
+            : ("已识别到 " + items.length + " 个文件，但默认筛选「" + selectedTypeText + "」没有命中；点上方“全部”查看全部文件。"),
         }));
         return;
       }

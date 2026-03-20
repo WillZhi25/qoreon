@@ -1,3 +1,8 @@
+    function isTerminalTextCli(cliType) {
+      const normalized = String(cliType || "").trim().toLowerCase();
+      return normalized === "claude" || normalized === "opencode";
+    }
+
     function renderRuns(runs) {
       const box = document.getElementById("ccbRuns");
       CCB.runs = Array.isArray(runs) ? runs.slice() : [];
@@ -13,7 +18,7 @@
         top.appendChild(el("div", { class: "id", text: (r.createdAt || "") + " · " + (r.id || "") }));
         const st = String(r.status || "");
         const cliType = String(r.cliType || r.cli_type || "").trim().toLowerCase();
-        const suppressClaudeLegacyPreview = cliType === "claude";
+        const suppressTerminalTextLegacyPreview = isTerminalTextCli(cliType);
         top.appendChild(chip(st, st === "done" ? "good" : (st === "error" ? "bad" : "warn")));
         row.appendChild(top);
         const metaBar = el("div", { class: "run-context-meta" });
@@ -35,13 +40,13 @@
           const eh = String(r.errorHint || "").trim();
           if (eh) row.appendChild(el("div", { class: "hint", text: eh }));
         }
-        const partial = suppressClaudeLegacyPreview ? "" : String(r.partialPreview || "").trim();
+        const partial = suppressTerminalTextLegacyPreview ? "" : String(r.partialPreview || "").trim();
         if (partial) {
           const pv = el("div", { class: "partial md" });
           setMarkdown(pv, partial);
           row.appendChild(pv);
         }
-        const amCount = suppressClaudeLegacyPreview ? 0 : Number(r.agentMessagesCount || 0);
+        const amCount = suppressTerminalTextLegacyPreview ? 0 : Number(r.agentMessagesCount || 0);
         if (amCount > 0) row.appendChild(el("div", { class: "hint", text: "已回捞过程消息 " + amCount + " 条" }));
         const last = String(r.lastPreview || "");
         if (last) {
@@ -1576,7 +1581,7 @@
       const full = (detailFull && typeof detailFull === "object") ? detailFull : null;
       if (!full) return { items: [], rows: [], exact: false };
       const normalizedCliType = String(cliType || "").trim().toLowerCase();
-      const suppressClaudeAgentMessages = normalizedCliType === "claude";
+      const suppressTerminalTextAgentMessages = isTerminalTextCli(normalizedCliType);
       const out = [];
       const rows = [];
       const push = (raw) => {
@@ -1601,7 +1606,7 @@
           full.processMessages,
           full.process_messages,
         ];
-        if (!suppressClaudeAgentMessages) {
+        if (!suppressTerminalTextAgentMessages) {
           directLists.unshift(full.agent_messages);
           directLists.unshift(full.agentMessages);
         }
@@ -1624,7 +1629,7 @@
         run && run.cliType,
         run && run.cli_type,
       ]) || "").trim().toLowerCase();
-      const suppressClaudeLegacyPreview = cliType === "claude";
+      const suppressTerminalTextLegacyPreview = isTerminalTextCli(cliType);
 
       const incoming = [];
       const push = (raw) => {
@@ -1636,8 +1641,8 @@
       const detailProcess = extractDetailProcessMessages(detailFull, cliType);
       const detailRows = Array.isArray(detailProcess.rows) ? detailProcess.rows : [];
       detailProcess.items.forEach((msg) => push(msg));
-      if (!incoming.length && !suppressClaudeLegacyPreview) push(run && run.partialPreview);
-      if (!incoming.length && !suppressClaudeLegacyPreview) push(detailFull && detailFull.partialMessage);
+      if (!incoming.length && !suppressTerminalTextLegacyPreview) push(run && run.partialPreview);
+      if (!incoming.length && !suppressTerminalTextLegacyPreview) push(detailFull && detailFull.partialMessage);
       const hasExactDetailItems = !!detailProcess.exact;
 
       const prevState = PCONV.processTrailByRun[rid] || { items: [], rows: [], status: "", updatedAt: 0 };
@@ -1700,7 +1705,7 @@
       }
 
       const latest = items.length ? items[items.length - 1] : "";
-      const countFromRun = suppressClaudeLegacyPreview ? 0 : Number((run && run.agentMessagesCount) || 0);
+      const countFromRun = suppressTerminalTextLegacyPreview ? 0 : Number((run && run.agentMessagesCount) || 0);
       // 展示条数以“已解析列表/后端统计”较大值为准，避免切会话时临时回退。
       const count = Math.max(items.length, countFromRun);
       const rows = (rid && PCONV.processTrailByRun[rid] && Array.isArray(PCONV.processTrailByRun[rid].rows))
@@ -1749,7 +1754,7 @@
         run && run.cliType,
         run && run.cli_type,
       ]) || "").trim().toLowerCase();
-      const suppressClaudeLegacyFallback = cliType === "claude";
+      const suppressTerminalTextLegacyFallback = isTerminalTextCli(cliType);
       if (d) {
         const effectiveDetailRunStatus = deriveRunStateFromSource(d.run, "idle");
         const detailWorking = isWorkingLikeState(effectiveDetailRunStatus);
@@ -1759,7 +1764,7 @@
         if (allowTerminalDetailText && fullLast.trim()) {
           return fullLast;
         }
-        if (!suppressClaudeLegacyFallback) {
+        if (!suppressTerminalTextLegacyFallback) {
           const fullPartial = String(d.partialMessage || "");
           if ((allowTerminalDetailText || allowProgressDetailText) && fullPartial.trim()) return fullPartial;
           const agentMsgs = Array.isArray(d.agentMessages) ? d.agentMessages : [];
@@ -1770,7 +1775,7 @@
         }
       }
       const runPartial = String((run && run.partialPreview) || "");
-      if (suppressClaudeLegacyFallback) {
+      if (suppressTerminalTextLegacyFallback) {
         const runLastOnly = String((run && run.lastPreview) || "");
         return runLastOnly;
       }
@@ -1833,9 +1838,9 @@
     const SKILL_DOLLAR_RE = /\$([A-Za-z0-9][A-Za-z0-9._-]{1,80})/g;
     const SKILL_LINK_RE = /\[([^\]]+)\]\(([^)]+?SKILL\.md[^)]*)\)/ig;
     const SKILL_PATH_RE = /\/([^/]+)\/SKILL\.md/i;
-    const UUID_TOKEN_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    const AGENT_SESSION_RE = /\b([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b/ig;
-    const AGENT_LINE_HINT_RE = /(?:^|\n)\s*([0-9]{2}|子级[0-9]{2}|辅助[0-9]{2}|主体|总控)\s*[：:]\s*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b/ig;
+    const UUID_TOKEN_RE = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|ses_[a-z0-9]{8,128})$/i;
+    const AGENT_SESSION_RE = /\b([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|ses_[a-z0-9]{8,128})\b/ig;
+    const AGENT_LINE_HINT_RE = /(?:^|\n)\s*([0-9]{2}|子级[0-9]{2}|辅助[0-9]{2}|主体|总控)\s*[：:]\s*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|ses_[a-z0-9]{8,128})\b/ig;
     const TAG_ICON_BY_KIND = {
       skill: "⚙",
       agent: "🤖",

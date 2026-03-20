@@ -221,8 +221,9 @@ class OpenCodeAdapter(CLIAdapter):
             except json.JSONDecodeError:
                 pass
 
-        # Return plain text as structured message
-        return {"type": "text", "text": stripped}
+        # Plain stdout for OpenCode is typically the assistant's final prose, not
+        # a structured process event. Let runtime aggregate it into terminal text.
+        return None
 
     @classmethod
     def get_process_signature(cls, session_id: str) -> str:
