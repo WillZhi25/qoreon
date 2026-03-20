@@ -1,8 +1,13 @@
-# task-dashboard-oss
+# Qore
 
-一个面向 AI 协作场景的本地任务看板与 CCB（CLI Control Bridge）实验项目。
+Qore 是连接人类意图与 AI 执行的核心系统。
 
-它提供三类能力：
+它让多个 AI Agent 可以被组织、协同和持续优化。
+你不再直接用 AI，而是管理一个 AI 团队。
+
+本地运行，接入 Claude Code、Codex 等工具，提供统一的协同与控制层。
+
+当前这份公开仓候选提供三类能力：
 
 - 把目录里的任务/反馈/沉淀 Markdown 扫描成可视化看板。
 - 通过同源本机 API 驱动 Codex、Claude、Gemini、OpenCode、Trae 等 CLI 会话。
@@ -62,7 +67,7 @@ python3 server.py --port 18770
 
 - 默认只监听 `127.0.0.1`
 - 默认不包含任何真实会话、真实 run、真实任务空间
-- 公开版只内置公开安全的种子包与技能包
+- Qore 公开版只内置公开安全的种子包与技能包
 - Git 桥接能力默认是 `read_only / dry_run`
 
 ## 测试

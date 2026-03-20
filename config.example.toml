@@ -1,6 +1,6 @@
 [dashboard]
-title = "Task Dashboard OSS"
-subtitle = "公开版一体包：看板 + CCB + 示例项目 + Agent/技能种子"
+title = "Qore"
+subtitle = "连接人类意图与 AI 执行的本地协同与控制层"
 
 [[projects]]
 id = "minimal_project"

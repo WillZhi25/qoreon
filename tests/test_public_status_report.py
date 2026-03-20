@@ -26,7 +26,7 @@ class PublicStatusReportTests(unittest.TestCase):
             payload = build_status_report_page_data(
                 script_dir,
                 generated_at="2026-03-20T12:00:00+08:00",
-                dashboard={"title": "Task Dashboard OSS", "subtitle": ""},
+                dashboard={"title": "Qore", "subtitle": ""},
                 links={"task_page": "project-task-dashboard.html"},
             )
         report = payload["status_report"]
