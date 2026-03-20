@@ -15,9 +15,9 @@
 - `examples/minimal-project/seed/*.json` 是公开种子包真源
 - `docs/public/ai-bootstrap.md` 是 AI 初始化唯一入口
 
-## Qore 开源一体包
+## Qoreon 开源一体包
 
-Qore 公开版不是单纯代码导出，还包括：
+Qoreon 公开版不是单纯代码导出，还包括：
 
 - 示例项目目录
 - 初始任务

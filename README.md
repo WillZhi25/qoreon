@@ -1,17 +1,17 @@
-# Qore
+# Qoreon
 
-![Qore Banner](assets/brand/qore-banner.svg)
+![Qoreon Banner](assets/brand/qoreon-banner.svg)
 
-Qore is the core system between human intent and AI execution.
+Qoreon is the core system between human intent and AI execution.
 
 Organize, coordinate, and continuously improve an AI team.
 You no longer use one AI directly. You manage an AI team.
 
 Run locally, connect Codex, Claude Code and other CLI agents, and add one unified coordination and control layer on top.
 
-## Why Qore
+## Why Qoreon
 
-Most AI tooling stops at "one prompt, one answer". Qore is built for a different operating model:
+Most AI tooling stops at "one prompt, one answer". Qoreon is built for a different operating model:
 
 - Turn markdown task spaces into a visible control board.
 - Coordinate multiple AI agents around channels, tasks, feedback, and sediment.
@@ -76,7 +76,7 @@ python3 server.py --port 18770
 
 ## Product Positioning
 
-Qore is not just a dashboard and not just an agent runner.
+Qoreon is not just a dashboard and not just an agent runner.
 
 It is:
 

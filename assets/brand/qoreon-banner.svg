@@ -8,7 +8,7 @@
     <circle cx="160" cy="160" r="14" fill="#F4EFE6"/>
     <circle cx="205" cy="115" r="9" fill="#F2B84B"/>
   </g>
-  <text x="292" y="138" fill="#F7F4EE" font-size="82" font-family="Avenir Next, Inter, Segoe UI, sans-serif" font-weight="700">Qore</text>
+  <text x="292" y="138" fill="#F7F4EE" font-size="74" font-family="Avenir Next, Inter, Segoe UI, sans-serif" font-weight="700">Qoreon</text>
   <text x="292" y="182" fill="#9FECDF" font-size="24" font-family="Avenir Next, Inter, Segoe UI, sans-serif">The core system between human intent and AI execution</text>
   <text x="292" y="222" fill="#D9D4CB" font-size="22" font-family="Avenir Next, Inter, Segoe UI, sans-serif">Organize, coordinate, and improve an AI team locally.</text>
   <defs>

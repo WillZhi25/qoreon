@@ -1,11 +1,11 @@
 {
   "page": {
-    "title": "Qore 状态汇报",
-    "subtitle": "Qore 开源候选包当前范围、示例项目与下一步动作的统一视图。"
+    "title": "Qoreon 状态汇报",
+    "subtitle": "Qoreon 开源候选包当前范围、示例项目与下一步动作的统一视图。"
   },
   "hero": {
     "kicker": "Open Source Candidate",
-    "headline": "Qore 开源候选包已就位",
+    "headline": "Qoreon 开源候选包已就位",
     "summary": "它让多个 AI Agent 可以被组织、协同和持续优化。你不再直接用 AI，而是管理一个 AI 团队。"
   },
   "summary_cards": [
@@ -32,7 +32,7 @@
     {
       "title": "核心构建链路",
       "status": "done",
-      "summary": "Qore 的 build/server 已切到公开仓独立路径与默认端口。 "
+      "summary": "Qoreon 的 build/server 已切到公开仓独立路径与默认端口。 "
     },
     {
       "title": "示例项目与种子包",
@@ -100,7 +100,7 @@
     },
     {
       "date": "2026-03-20",
-      "summary": "Qore 公开候选目录、示例项目、种子包、技能包与 AI 初始化入口已落地。"
+      "summary": "Qoreon 公开候选目录、示例项目、种子包、技能包与 AI 初始化入口已落地。"
     }
   ],
   "references": [

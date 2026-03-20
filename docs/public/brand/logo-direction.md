@@ -1,10 +1,10 @@
 # Logo Direction
 
-这不是最终品牌手册，而是 Qore 第一轮可执行 Logo 方向。
+这不是最终品牌手册，而是 Qoreon 第一轮可执行 Logo 方向。
 
 ## 品牌判断
 
-Qore 的核心不是“聊天”，而是“控制层”。
+Qoreon 的核心不是“聊天”，而是“控制层”。
 
 品牌语义应同时体现：
 
@@ -56,7 +56,7 @@ Qore 的核心不是“聊天”，而是“控制层”。
 
 - 识别成本最低
 - 适合 GitHub 场景的小尺寸展示
-- 能同时承接“Qore”品牌名和“控制层”语义
+- 能同时承接“Qoreon”品牌名和“控制层”语义
 
 ## 视觉基线
 
@@ -83,8 +83,8 @@ Qore 的核心不是“聊天”，而是“控制层”。
 
 ## 已落地的草图文件
 
-- `assets/brand/qore-symbol.svg`
-- `assets/brand/qore-banner.svg`
+- `assets/brand/qoreon-symbol.svg`
+- `assets/brand/qoreon-banner.svg`
 
 ## 使用建议
 
@@ -92,13 +92,13 @@ Qore 的核心不是“聊天”，而是“控制层”。
 
 优先使用：
 
-- 深底版本 `qore-symbol.svg`
+- 深底版本 `qoreon-symbol.svg`
 
 ### README 首屏
 
 优先使用：
 
-- 横幅版本 `qore-banner.svg`
+- 横幅版本 `qoreon-banner.svg`
 
 ### 后续官网
 

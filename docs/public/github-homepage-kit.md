@@ -1,24 +1,25 @@
 # GitHub Homepage Kit
 
-这份文件用于把 Qore 的 GitHub 仓首页一次性配齐。
+这份文件用于把 Qoreon 的 GitHub 仓首页一次性配齐。
 
 ## 1. 仓名建议
 
 截至 2026-03-20，本地核查与 GitHub 页面观察结果是：
 
-- `github.com/qore` 已被占用，不能直接作为你的顶级账号/组织名
-- 只有在你拥有 `qore` 这个 GitHub 组织或用户时，才可能使用 `github.com/qore/qore`
+- `github.com/Qoreon` 当前返回 404，说明 `Qoreon` 这个 GitHub 用户名/组织名当前看未被占用
+- 若你创建了 `Qoreon` 组织或用户，就可以使用 `github.com/Qoreon/qoreon`
 
 因此建议按两种情况处理：
 
-- 你已有自己的组织：优先使用该组织下的 `qore`
-- 你还没有最终组织：用 `qore-oss`、`qore-system`、`qore-agents` 作为过渡仓名
+- 你能创建 `Qoreon` 组织：优先使用 `Qoreon/qoreon`
+- 你已有其他组织：优先使用该组织下的 `qoreon`
+- 若要保守过渡：用 `qoreon-oss`、`qoreon-system`、`qoreon-agents`
 
 ## 2. GitHub About 区建议
 
 ### 名称
 
-`Qore`
+`Qoreon`
 
 ### 简短描述
 
@@ -45,7 +46,7 @@
 
 ### 标题
 
-`Qore`
+`Qoreon`
 
 ### 副标题
 
@@ -59,7 +60,7 @@
 
 GitHub 首页首屏只做 4 件事：
 
-1. 用一句话说清 Qore 是什么
+1. 用一句话说清 Qoreon 是什么
 2. 让人理解它不是“又一个 prompt 工具”
 3. 给出 3 步试跑路径
 4. 让外部 AI 或开发者知道先看 `ai-bootstrap`
