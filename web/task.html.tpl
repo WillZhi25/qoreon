@@ -349,10 +349,30 @@
           <!-- 对话区块 -->
           <section class="convwrap" id="convWrap">
             <div class="convtimeline" id="convTimeline"></div>
+            <div class="convtrainingdock" id="convTrainingDock" aria-hidden="true">
+              <div class="convtraining" id="convTraining" style="display:none;">
+                <div class="convtraining-ico" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none">
+                    <path d="M4 8.8 12 5l8 3.8-8 3.8L4 8.8Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+                    <path d="M7 11.4V15c0 .9 2 2.4 5 2.4s5-1.5 5-2.4v-3.6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+                  </svg>
+                </div>
+                <div class="convtraining-main">
+                  <div class="convtraining-title-row">
+                    <span class="convtraining-title">Agent培训</span>
+                    <span class="convtraining-count" id="convTrainingCount">再 1 条消息后自动消失</span>
+                  </div>
+                  <div class="convtraining-desc" id="convTrainingDesc">新 Agent 开始协作前，先发送标准培训说明。</div>
+                </div>
+                <button class="btn primary convtraining-send" id="convTrainingSendBtn" type="button">发送培训</button>
+              </div>
+            </div>
             <div class="convcomposer">
-              <div class="convhint" id="convHint">在该会话下继续发送消息，系统会按 5 秒频率自动刷新处理状态。</div>
               <div class="convsenderrow" id="convSenderRow">
-                <div class="convsenderhint" id="convSenderHint"></div>
+                <div class="convsendermeta">
+                  <div class="convsenderhint" id="convSenderHint"></div>
+                  <div class="convhint" id="convHint">在该会话下继续发送消息，系统会按 5 秒频率自动刷新处理状态。</div>
+                </div>
                 <div class="convsenderactions">
                   <button class="convrecentagents-global-toggle active" id="convRecentAgentsGlobalToggle" type="button" title="已显示最近联系，点击隐藏" aria-label="隐藏最近联系" aria-pressed="true">
                     <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">

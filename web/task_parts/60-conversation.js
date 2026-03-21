@@ -84,6 +84,80 @@
       return null;
     }
 
+    function buildConversationRuntimeShadowMeta(currentRuntimeState, runs) {
+      const runtimeState = (currentRuntimeState && typeof currentRuntimeState === "object") ? currentRuntimeState : {};
+      const visibleRunIds = new Set(
+        (Array.isArray(runs) ? runs : [])
+          .map((item) => String((item && item.id) || "").trim())
+          .filter(Boolean)
+      );
+      const activeRunId = String(runtimeState.active_run_id || "").trim();
+      const queuedRunId = String(runtimeState.queued_run_id || "").trim();
+      return {
+        activeRunId,
+        queuedRunId,
+        missingActiveRunId: activeRunId && !visibleRunIds.has(activeRunId) ? activeRunId : "",
+        missingQueuedRunId: queuedRunId && !visibleRunIds.has(queuedRunId) ? queuedRunId : "",
+        queueDepth: Math.max(0, Number(runtimeState.queue_depth || 0) || 0),
+        updatedAt: String(runtimeState.updated_at || "").trim(),
+      };
+    }
+
+    function buildConversationRuntimeShadowHint(shadowMeta) {
+      const meta = (shadowMeta && typeof shadowMeta === "object") ? shadowMeta : {};
+      if (!meta.missingActiveRunId && !meta.missingQueuedRunId) return null;
+      const parts = [];
+      if (meta.missingActiveRunId) parts.push("当前有 1 条活跃消息正在处理");
+      if (meta.missingQueuedRunId) parts.push(meta.queueDepth > 0 ? ("另有 " + meta.queueDepth + " 条消息排队中") : "另有排队消息等待开始");
+      return {
+        text: parts.join(" · "),
+        title: [
+          meta.missingActiveRunId ? ("active_run_id: " + meta.missingActiveRunId) : "",
+          meta.missingQueuedRunId ? ("queued_run_id: " + meta.missingQueuedRunId) : "",
+          meta.updatedAt ? ("updated_at: " + meta.updatedAt) : "",
+        ].filter(Boolean).join("\n"),
+      };
+    }
+
+    function buildConversationRuntimeShadowRuns(ctx, currentSession, currentRuntimeState, shadowMeta) {
+      const meta = (shadowMeta && typeof shadowMeta === "object") ? shadowMeta : {};
+      const createdAt = String(firstNonEmptyText([
+        meta.updatedAt,
+        currentRuntimeState && currentRuntimeState.updated_at,
+        currentSession && currentSession.lastActiveAt,
+        new Date().toISOString(),
+      ]) || "").trim();
+      const queuedText = String(firstNonEmptyText([
+        currentSession && currentSession.latestUserMsg,
+        "新消息已进入队列，等待前序任务完成后自动开始。",
+      ]) || "").trim();
+      return {
+        activeRun: meta.missingActiveRunId ? {
+          id: meta.missingActiveRunId,
+          createdAt,
+          startedAt: createdAt,
+          updatedAt: createdAt,
+          status: "running",
+          display_state: "running",
+          channelName: String((ctx && ctx.channelName) || ""),
+          cliType: String((ctx && ctx.cliType) || "codex"),
+          runtime_state_shadow: true,
+        } : null,
+        queuedRun: meta.missingQueuedRunId ? {
+          id: meta.missingQueuedRunId,
+          createdAt,
+          status: "queued",
+          display_state: "queued",
+          channelName: String((ctx && ctx.channelName) || ""),
+          cliType: String((ctx && ctx.cliType) || "codex"),
+          messagePreview: queuedText,
+          queue_reason: "session_serial",
+          blocked_by_run_id: meta.activeRunId || "",
+          runtime_state_shadow: true,
+        } : null,
+      };
+    }
+
     function captureDebugLogScrollPositions(container) {
       if (!container) return;
       if (!PCONV.debugLogScrollTop) PCONV.debugLogScrollTop = Object.create(null);
@@ -614,6 +688,7 @@
         if (senderHintEl) senderHintEl.textContent = "";
         renderConversationEnterSendToggle(false);
         renderConversationQuickTips(null, []);
+        renderConversationTrainingPrompt(null, []);
         renderConvComposerRunActions(null, []);
         input.placeholder = "请先选择具体项目，再发送会话消息";
         input.disabled = true;
@@ -640,6 +715,7 @@
         if (senderHintEl) senderHintEl.textContent = "";
         renderConversationEnterSendToggle(false);
         renderConversationQuickTips(null, []);
+        renderConversationTrainingPrompt(null, []);
         renderConvComposerRunActions(null, []);
         input.placeholder = "当前项目没有可用会话，请先维护 session_id";
         input.disabled = true;
@@ -732,6 +808,17 @@
         if (ta >= 0 && tb >= 0 && ta !== tb) return ta - tb; // oldest first (newest at bottom)
         return String(a.createdAt || "").localeCompare(String(b.createdAt || ""));
       });
+      const currentRuntimeState = getSessionRuntimeState(currentSession);
+      const currentQueueDepth = (() => {
+        const runtimeDepth = Math.max(0, Number((currentRuntimeState && currentRuntimeState.queue_depth) || 0));
+        const fallbackDepth = runs.reduce((count, item) => {
+          const oneStatus = getRunDisplayState(item, PCONV.detailMap[String((item && item.id) || "")] || null);
+          return count + ((oneStatus === "queued" || oneStatus === "retry_waiting") ? 1 : 0);
+        }, 0);
+        return Math.max(runtimeDepth, fallbackDepth);
+      })();
+      const runtimeShadowMeta = buildConversationRuntimeShadowMeta(currentRuntimeState, runs);
+      const runtimeShadowRuns = buildConversationRuntimeShadowRuns(ctx, currentSession, currentRuntimeState, runtimeShadowMeta);
       const liveRunHint = buildConversationLiveRunHint(runs);
       if (liveRunHint) {
         const preview = String(liveRunHint.preview || "").trim();
@@ -750,20 +837,18 @@
           preview ? ("最新输出预览: " + preview) : "",
         ].filter(Boolean).join("\n");
       } else {
-        hintEl.title = "";
+        const runtimeShadowHint = buildConversationRuntimeShadowHint(runtimeShadowMeta);
+        if (runtimeShadowHint) {
+          hintEl.textContent = runtimeShadowHint.text;
+          hintEl.title = runtimeShadowHint.title || "";
+        } else {
+          hintEl.title = "";
+        }
       }
       renderConversationQuickTips(ctx, runs);
+      renderConversationTrainingPrompt(ctx, runs);
       refreshConversationRecentAgentsFromRuns(ctx, runs);
       renderConvComposerRunActions(ctx, runs);
-      const currentRuntimeState = getSessionRuntimeState(currentSession);
-      const currentQueueDepth = (() => {
-        const runtimeDepth = Math.max(0, Number((currentRuntimeState && currentRuntimeState.queue_depth) || 0));
-        const fallbackDepth = runs.reduce((count, item) => {
-          const oneStatus = getRunDisplayState(item, PCONV.detailMap[String((item && item.id) || "")] || null);
-          return count + ((oneStatus === "queued" || oneStatus === "retry_waiting") ? 1 : 0);
-        }, 0);
-        return Math.max(runtimeDepth, fallbackDepth);
-      })();
 
       const timelineLoading = PCONV.timelineLoadingKey === timelineKey;
       const timelineLoadingBefore = PCONV.timelineBeforeLoadingKey === timelineKey;
@@ -1061,6 +1146,80 @@
           mentionTargets,
         });
         timeline.appendChild(aiRow);
+      }
+
+      if (runtimeShadowRuns.activeRun) {
+        const shadowRun = runtimeShadowRuns.activeRun;
+        const shadowSender = resolveMessageSender(shadowRun, {
+          role: "assistant",
+          cliType: firstNonEmptyText([shadowRun.cliType, ctx && ctx.cliType]),
+          agentName: firstNonEmptyText([ctx && ctx.agentName, ctx && ctx.displayName, ctx && ctx.alias, ctx && ctx.displayChannel]),
+          channelName: firstNonEmptyText([shadowRun.channelName, ctx && ctx.channelName]),
+          displayChannel: firstNonEmptyText([ctx && ctx.displayChannel, ctx && ctx.alias]),
+          textCandidates: [],
+        });
+        const shadowAiRow = renderConversationAssistantFamily({
+          rid: String(shadowRun.id || ""),
+          r: shadowRun,
+          d: null,
+          ctx,
+          runSpec: readConversationSpecFields(shadowRun),
+          st: "running",
+          timeoutLike: false,
+          actionBusy: "",
+          assistantSender: shadowSender,
+          assistantMessageKind: resolveConversationMessageKind(shadowRun, "assistant"),
+          assistantText: "",
+          displayAssistantText: "",
+          displayUserText: "",
+          err: "",
+          hint: "",
+          callbackEventMeta: null,
+          restartRecoveryMeta: null,
+          queueReasonText: "",
+          blockedByText: "",
+          receiptProjection: null,
+          mentionTargets: [],
+        });
+        shadowAiRow.classList.add("runtime-shadow");
+        timeline.appendChild(shadowAiRow);
+      }
+
+      if (runtimeShadowRuns.queuedRun) {
+        const shadowRun = runtimeShadowRuns.queuedRun;
+        const shadowSender = resolveMessageSender(shadowRun, {
+          role: "user",
+          cliType: firstNonEmptyText([shadowRun.cliType, ctx && ctx.cliType]),
+          channelName: firstNonEmptyText([shadowRun.channelName, ctx && ctx.channelName]),
+          displayChannel: firstNonEmptyText([ctx && ctx.displayChannel, ctx && ctx.alias]),
+          textCandidates: [shadowRun.messagePreview],
+        });
+        const shadowUserRow = renderConversationUserFamily({
+          rid: String(shadowRun.id || ""),
+          r: shadowRun,
+          d: null,
+          senderRun: shadowRun,
+          ctx,
+          runSpec: readConversationSpecFields(shadowRun),
+          userSender: shadowSender,
+          userMessageKind: resolveConversationMessageKind(shadowRun, "user"),
+          displayUserText: String(shadowRun.messagePreview || ""),
+          userText: String(shadowRun.messagePreview || ""),
+          attachments: [],
+          replyContext: null,
+          queuedCompactMode: true,
+          callbackEventMeta: null,
+          callbackEventDuplicate: false,
+          restartRecoveryMeta: null,
+          restartRecoveryDuplicate: false,
+          currentQueueDepth,
+          aggregateCount: 0,
+          aggregateLastMergedAt: "",
+          actionBusy: "",
+          mentionTargets: [],
+        });
+        shadowUserRow.classList.add("runtime-shadow");
+        timeline.appendChild(shadowUserRow);
       }
 
       if (PCONV.optimistic && PCONV.optimistic.sessionId === ctx.sessionId) {
@@ -1479,7 +1638,20 @@
           const st = String(getSessionStatus(s) || "").trim().toLowerCase();
           return st === "running" || st === "queued" || st === "retry_waiting" || st === "external_busy";
         });
-        scheduleConversationPoll(conversationPollDelay(hasRuntimeWorking));
+        const selectedSessionId = String(STATE.selectedSessionId || "").trim();
+        const selectedSession = selectedSessionId
+          ? baseSessions.find((s) => String((s && (s.sessionId || s.id)) || "").trim() === selectedSessionId)
+          : null;
+        const selectedRuntimeState = getSessionRuntimeState(selectedSession);
+        const selectedSessionHasRuntimeWork = !!(
+          selectedRuntimeState
+          && (
+            String(selectedRuntimeState.active_run_id || "").trim()
+            || String(selectedRuntimeState.queued_run_id || "").trim()
+          )
+        );
+        const nextPollMs = selectedSessionHasRuntimeWork ? 1200 : conversationPollDelay(hasRuntimeWorking);
+        scheduleConversationPoll(nextPollMs);
       } catch (err) {
         console.error("refreshConversationPanel error:", err);
         if (String(STATE.project || "").trim() && String(STATE.project || "").trim() !== "overview") {

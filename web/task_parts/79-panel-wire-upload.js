@@ -199,6 +199,7 @@
       recentAgentExpandedBySessionKey: Object.create(null), // projectId::sessionId -> bool
       filesBySessionKey: Object.create(null), // projectId::sessionId -> { count, items, updatedAt, fetchedAt }
       fileStarredBySessionKey: loadSessionScopedMap(CONV_FILE_STARRED_KEY), // projectId::sessionId -> { fileKey:true }
+      trainingSentBySessionKey: loadSessionScopedMap(CONV_TRAINING_SENT_KEY), // projectId::sessionId -> sentAt
       fileOnlyStarredBySessionKey: Object.create(null),
       fileSortBySessionKey: Object.create(null),
       fileTypeFilterBySessionKey: Object.create(null),
@@ -544,6 +545,10 @@
       const attachmentContainer = document.getElementById("convAttachments");
       const composer = document.querySelector(".convcomposer");
       const senderRow = document.getElementById("convSenderRow");
+      const trainingContainer = document.getElementById("convTraining");
+      const trainingCount = document.getElementById("convTrainingCount");
+      const trainingDesc = document.getElementById("convTrainingDesc");
+      const trainingSendBtn = document.getElementById("convTrainingSendBtn");
       let recentAgentContainer = document.getElementById("convRecentAgents");
       let recentAgentToggle = document.getElementById("convRecentAgentsGlobalToggle");
       let mentionContainer = document.getElementById("convMentions");
@@ -630,6 +635,10 @@
         container: attachmentContainer,
         recentAgentContainer,
         recentAgentToggle,
+        trainingContainer,
+        trainingCount,
+        trainingDesc,
+        trainingSendBtn,
         mentionContainer,
         replyContainer,
         mentionSuggest,
@@ -1130,6 +1139,14 @@
 
       const csb = document.getElementById("convSendBtn");
       if (csb) csb.addEventListener("click", (e) => { e.preventDefault(); sendConversationMessage(); });
+      const ctb = document.getElementById("convTrainingSendBtn");
+      if (ctb && !ctb.__convTrainingBound) {
+        ctb.__convTrainingBound = true;
+        ctb.addEventListener("click", (e) => {
+          e.preventDefault();
+          sendConversationTrainingMessage();
+        });
+      }
       const cms = document.getElementById("convMemoSaveBtn");
       if (cms) cms.addEventListener("click", (e) => { e.preventDefault(); saveCurrentComposerAsMemo(); });
       const cet = document.getElementById("convEnterSendToggle");

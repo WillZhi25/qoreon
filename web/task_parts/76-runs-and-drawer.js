@@ -1343,7 +1343,11 @@
       return [];
     }
 
-    async function sendConversationQuickMessage(messageText) {
+    async function sendConversationQuickMessage(messageText, opts = {}) {
+      const options = (opts && typeof opts === "object") ? opts : {};
+      const pendingHint = String(options.pendingHint || "").trim() || "发送中（快捷重试）…";
+      const successHint = String(options.successHint || "").trim() || "已发送快捷重试消息，等待执行回溯刷新…";
+      const onSuccess = typeof options.onSuccess === "function" ? options.onSuccess : null;
       const quickMsg = String(messageText || "").trim();
       if (!quickMsg || PCONV.sending) return false;
       const input = document.getElementById("convMsg");
@@ -1376,7 +1380,7 @@
       }
       sendBtn.disabled = true;
       sendBtn.textContent = "发送中...";
-      setHintText("conv", "发送中（快捷重试）…");
+      setHintText("conv", pendingHint);
       renderConversationDetail(true);
 
       let failedText = "";
@@ -1406,7 +1410,12 @@
           const runId = resp && resp.run ? String(resp.run.id || "") : "";
           PCONV.optimistic = null;
           PCONV.sending = false;
-          setHintText("conv", "已发送快捷重试消息，等待执行回溯刷新…");
+          if (onSuccess) {
+            try {
+              await onSuccess({ ctx, runId, response: resp });
+            } catch (_) {}
+          }
+          setHintText("conv", successHint);
           await refreshConversationPanel();
           if (runId) scheduleConversationPoll(5000);
           return true;

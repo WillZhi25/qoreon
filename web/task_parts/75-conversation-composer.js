@@ -752,6 +752,158 @@
       renderConversationRecentAgentsByKey(draftKey);
     }
 
+    const CONVERSATION_AGENT_TRAINING_PREFIX = "[Agent培训]";
+
+    function getConversationTrainingSentAtByKey(key) {
+      const draftKey = String(key || "").trim();
+      if (!draftKey) return "";
+      return String(PCONV.trainingSentBySessionKey[draftKey] || "").trim();
+    }
+
+    function setConversationTrainingSentByKey(key, sentAt) {
+      const draftKey = String(key || "").trim();
+      if (!draftKey) return;
+      const text = String(sentAt === true ? new Date().toISOString() : (sentAt || "")).trim();
+      if (!text) delete PCONV.trainingSentBySessionKey[draftKey];
+      else PCONV.trainingSentBySessionKey[draftKey] = text;
+      persistSessionScopedMap(CONV_TRAINING_SENT_KEY, PCONV.trainingSentBySessionKey);
+    }
+
+    function conversationTrainingVisibleMessageCount(runs) {
+      return (Array.isArray(runs) ? runs : [])
+        .filter((run) => !!String((run && run.id) || "").trim())
+        .length;
+    }
+
+    function conversationTrainingRemainingCount(runs) {
+      return Math.max(0, 3 - conversationTrainingVisibleMessageCount(runs));
+    }
+
+    function conversationTrainingTextFromRun(run, detail) {
+      return String(firstNonEmptyText([
+        detail && detail.full && detail.full.message,
+        run && run.message,
+        run && run.messagePreview,
+        run && run.lastMessage,
+        run && run.partialMessage,
+      ]) || "").trim();
+    }
+
+    function findConversationTrainingMessageSentAt(runs) {
+      const list = Array.isArray(runs) ? runs : [];
+      for (let i = list.length - 1; i >= 0; i -= 1) {
+        const run = list[i] || {};
+        const rid = String(run.id || "").trim();
+        const detail = rid ? (PCONV.detailMap[rid] || null) : null;
+        const text = conversationTrainingTextFromRun(run, detail);
+        if (!text.startsWith(CONVERSATION_AGENT_TRAINING_PREFIX)) continue;
+        return String(firstNonEmptyText([
+          run.createdAt,
+          detail && detail.full && detail.full.run && detail.full.run.createdAt,
+        ]) || "history").trim();
+      }
+      return "";
+    }
+
+    function buildConversationTrainingMessage() {
+      return [
+        CONVERSATION_AGENT_TRAINING_PREFIX,
+        "在开始当前协作前，请先完成以下学习：",
+        "",
+        "1. 明确职责边界",
+        "- 只围绕当前通道和当前任务主线执行，不自行扩题。",
+        "",
+        "2. 对齐项目真源",
+        "- 项目配置 = 真源默认上下文",
+        "- Agent = 身份，session = 当前承载结果",
+        "",
+        "3. 阅读必读入口",
+        "- README.md",
+        "- 活动 任务/",
+        "- 活动 反馈/",
+        "- 产出物/材料/",
+        "- 产出物/沉淀/",
+        "",
+        "4. 学习协作规则",
+        "- 默认处理后回原发送 Agent",
+        "- 若消息中有 callback_to.session_id，优先回该 session",
+        "- 发消息时带上自己的 session_id",
+        "- 最小回执结构：当前结论 / 是否通过或放行 / 唯一阻塞 / 关键路径或 run_id / 下一步动作",
+        "",
+        "5. 首个动作",
+        "- 学习完成后，请回复：",
+        "已完成初始化",
+        "职责边界: <一句话>",
+        "当前主线: <一句话>",
+        "唯一阻塞: <无/一句话>",
+        "首个动作: <一句话>",
+      ].join("\n");
+    }
+
+    function renderConversationTrainingPrompt(ctx, runs) {
+      const { trainingContainer, trainingCount, trainingDesc, trainingSendBtn } = convComposerUiElements();
+      const timeline = document.getElementById("convTimeline");
+      const trainingDock = document.getElementById("convTrainingDock");
+      const convWrap = document.getElementById("convWrap");
+      const composer = convWrap ? convWrap.querySelector(".convcomposer") : null;
+      if (!trainingContainer) return;
+      const draftKey = ctx ? convComposerDraftKey(ctx.projectId, ctx.sessionId) : "";
+      if (!draftKey) {
+        trainingContainer.style.display = "none";
+        if (trainingDock) trainingDock.classList.remove("show");
+        if (convWrap) convWrap.style.removeProperty("--conv-training-offset");
+        if (timeline) timeline.classList.remove("has-training-banner");
+        return;
+      }
+      const historySentAt = findConversationTrainingMessageSentAt(runs);
+      if (historySentAt && !getConversationTrainingSentAtByKey(draftKey)) {
+        setConversationTrainingSentByKey(draftKey, historySentAt);
+      }
+      const alreadySent = !!getConversationTrainingSentAtByKey(draftKey);
+      const remaining = conversationTrainingRemainingCount(runs);
+      const shouldShow = !alreadySent && remaining > 0;
+      trainingContainer.style.display = shouldShow ? "flex" : "none";
+      if (trainingDock) trainingDock.classList.toggle("show", shouldShow);
+      if (convWrap) {
+        if (shouldShow && composer) {
+          const composerHeight = Math.ceil(composer.getBoundingClientRect().height || composer.offsetHeight || 0);
+          convWrap.style.setProperty("--conv-training-offset", Math.max(composerHeight + 10, 132) + "px");
+        } else {
+          convWrap.style.removeProperty("--conv-training-offset");
+        }
+      }
+      if (timeline) timeline.classList.toggle("has-training-banner", shouldShow);
+      if (!shouldShow) return;
+      if (trainingCount) {
+        trainingCount.textContent = remaining > 0
+          ? ("再 " + remaining + " 条消息后自动消失")
+          : "本轮将自动收起";
+      }
+      if (trainingDesc) {
+        trainingDesc.textContent = "新 Agent 开始协作前，先发一条标准培训说明，让它先学习职责边界、项目真源、阅读入口和回执规则。";
+      }
+      if (trainingSendBtn) {
+        trainingSendBtn.disabled = !!PCONV.sending;
+        trainingSendBtn.textContent = PCONV.sending ? "发送中..." : "发送培训";
+      }
+    }
+
+    async function sendConversationTrainingMessage() {
+      const ctx = currentConversationCtx();
+      const draftKey = ctx ? convComposerDraftKey(ctx.projectId, ctx.sessionId) : "";
+      if (!ctx || !draftKey || PCONV.sending) return false;
+      if (getConversationTrainingSentAtByKey(draftKey)) return false;
+      const sentOk = await sendConversationQuickMessage(buildConversationTrainingMessage(), {
+        pendingHint: "发送中（Agent培训）…",
+        successHint: "已发送 Agent 培训，等待执行回溯刷新…",
+        onSuccess: () => {
+          setConversationTrainingSentByKey(draftKey, true);
+        },
+      });
+      if (sentOk) renderConversationTrainingPrompt(ctx, []);
+      return sentOk;
+    }
+
     function mentionLabelCandidates(rawMention) {
       const m = normalizeMentionTargetItem(rawMention);
       if (!m) return [];
