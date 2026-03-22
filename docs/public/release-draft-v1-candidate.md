@@ -2,6 +2,9 @@
 
 ![Qoreon Logo](../../assets/brand/qoreon-logo-primary.png)
 
+Qoreon 是连接人类意图与 AI 执行的控制层。
+这份页面是 Qoreon v1 公开候选版的对外说明。
+
 Qoreon is the control layer between human intent and AI execution.
 
 It turns AI work from isolated chats into a visible local system:
@@ -13,6 +16,9 @@ It turns AI work from isolated chats into a visible local system:
 - receipts and review loops
 
 ## What This Repository Is Trying To Prove
+
+这个仓库当前要证明的不是“云平台是否成立”，而是更基础的一件事：
+别人能否下载这个包，在自己的电脑上把一个带标准项目、带 AI 接管路径的本地系统跑起来。
 
 Qoreon v1 is not trying to be a hosted platform.
 
@@ -30,11 +36,15 @@ The first thing it is trying to prove is simpler:
 
 ![Home Project List](../../assets/screenshots/home-project-list.png)
 
+这是用户第一次看到的项目清单视角。
+
 This is the first “understand the public project” page.
 
 ### Project Dialog Detail
 
 ![Project Dialog Detail](../../assets/screenshots/project-dialog-detail.png)
+
+这是任务、对话、回执和协作都汇聚到一起的主工作面。
 
 This is where channels, task files, receipts, and AI execution meet.
 
@@ -42,15 +52,22 @@ This is where channels, task files, receipts, and AI execution meet.
 
 ![Message Flow Board](../../assets/screenshots/message-flow-board.png)
 
+这是消息派发与协同流转视角。
+
 This is where the public project shows dispatch, blocked states, and cross-channel message movement.
 
 ## The Public Install Path
+
+推荐安装路径如下：
 
 Recommended path on a new computer:
 
 ```bash
 python3 scripts/start_standard_project.py
 ```
+
+这是默认完整安装命令。
+如果本机后台会话创建被阻塞，系统会降级保留页面结果，并把后续接管交给本机 AI。
 
 If Codex is ready and you also want the default AI startup batch:
 
@@ -65,6 +82,8 @@ Then open:
 - `http://127.0.0.1:18770/__health`
 
 ## Why The Public Package Converges To `standard_project`
+
+公开包只收敛到一个默认项目：
 
 This repository intentionally converges to one default public project:
 
@@ -90,6 +109,8 @@ Inside `standard_project`, the public package already ships:
 
 ## What Ships In This Candidate
 
+本候选版已经包含：
+
 - core runtime and build pipeline
 - local server and static page generation
 - public docs in `docs/public/`
@@ -105,6 +126,8 @@ Inside `standard_project`, the public package already ships:
 
 ## What Does Not Ship
 
+本候选版不会附带：
+
 - real internal sessions
 - private runtime data
 - internal registry truth
@@ -112,6 +135,8 @@ Inside `standard_project`, the public package already ships:
 - production-side sync authority by default
 
 ## The Intended AI Handoff
+
+这个公开包的核心不是“代码压缩包”，而是“代码 + 项目模板 + AI 接管路径”。
 
 The public package is designed so that another AI can continue the setup with minimal confusion.
 
@@ -131,6 +156,8 @@ That means the “product” is not only code. It is:
 - the AI continuation path
 
 ## Current Preview Status
+
+当前状态：
 
 Current packaging direction:
 
