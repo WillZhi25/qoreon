@@ -36,10 +36,13 @@ from task_dashboard.helpers import (
     coerce_bool as _coerce_bool,
     coerce_int as _coerce_int,
 )
+from task_dashboard.parser_md import extract_field
 from task_dashboard.runtime.request_parsing import (
     _normalize_reasoning_effort_local as _normalize_reasoning_effort,
 )
 from task_dashboard.runtime.project_execution_context import build_project_execution_context
+from task_dashboard.task_identity import extract_task_identity_from_markdown
+from task_dashboard.utils import safe_read_text
 
 
 __all__ = [
@@ -190,6 +193,9 @@ __all__ = [
     "_sanitize_receipt_summary",
     "_sanitize_run_extra_meta",
 ]
+
+_TASK_WITH_RECEIPT_GUARD_MARKER = "[运行时回执约束]"
+_TASK_WITH_RECEIPT_GUARD_VERSION = "v1"
 
 
 def __getattr__(name):
@@ -631,6 +637,14 @@ def _normalize_heartbeat_task(
         if "interval_minutes" in item
         else (item.get("intervalMinutes") if "intervalMinutes" in item else d.get("interval_minutes"))
     )
+    max_execute_count_raw = (
+        item.get("max_execute_count")
+        if "max_execute_count" in item
+        else (item.get("maxExecuteCount") if "maxExecuteCount" in item else d.get("max_execute_count"))
+    )
+    max_execute_count = 0
+    if max_execute_count_raw not in (None, "", False):
+        max_execute_count = max(0, _coerce_int(max_execute_count_raw, 0))
     interval_minutes: Optional[int] = None
     daily_time = _safe_text(
         item.get("daily_time")
@@ -695,6 +709,7 @@ def _normalize_heartbeat_task(
         "daily_time": daily_time if schedule_type == "daily" else "",
         "weekdays": weekdays,
         "busy_policy": busy_policy,
+        "max_execute_count": int(max_execute_count or 0),
         "context_scope": context_scope,
         "ready": bool(enabled and channel_name and session_id and prompt_template and not errors),
         "errors": errors,
@@ -1790,6 +1805,7 @@ def _scan_project_task_items(project_id: str, root: Path) -> list[dict[str, Any]
             if updated_ts > 0
             else ""
         )
+        task_meta = _read_project_task_time_meta(p)
         rows.append(
             {
                 "task_path": task_path,
@@ -1798,6 +1814,8 @@ def _scan_project_task_items(project_id: str, root: Path) -> list[dict[str, Any]
                 "status_bucket": status_bucket,
                 "lane": _task_lane_from_bucket(status_bucket),
                 "channel_name": str(channel_name or rel_parts[task_idx - 1] or "").strip(),
+                "created_at": task_meta.get("created_at") or "",
+                "due": task_meta.get("due") or "",
                 "updated_at": updated_at,
                 "updated_ts": updated_ts,
                 "exists": True,
@@ -1913,6 +1931,26 @@ def _resolve_project_task_abs_path(project_id: str, task_path: str) -> Optional[
     return None
 
 
+def _read_project_task_time_meta(task_file: Path) -> dict[str, str]:
+    path = Path(task_file)
+    try:
+        if not path.exists() or not path.is_file():
+            return {"created_at": "", "due": ""}
+    except Exception:
+        return {"created_at": "", "due": ""}
+    try:
+        markdown = safe_read_text(path)
+    except Exception:
+        return {"created_at": "", "due": ""}
+    identity = extract_task_identity_from_markdown(markdown)
+    created_at = str(identity.get("created_at") or "").strip()
+    due = extract_field(markdown, "截止日期") or extract_field(markdown, "截止")
+    return {
+        "created_at": created_at,
+        "due": str(due or "").strip(),
+    }
+
+
 def _build_project_task_item_from_path(project_id: str, task_path: str) -> Optional[dict[str, Any]]:
     pid = str(project_id or "").strip()
     path_txt = _normalize_task_path_identity(task_path)
@@ -1936,6 +1974,7 @@ def _build_project_task_item_from_path(project_id: str, task_path: str) -> Optio
         if updated_ts > 0
         else ""
     )
+    task_meta = _read_project_task_time_meta(abs_path)
     status = _extract_status_from_task_filename(path_txt)
     status_bucket = bucket_key_for_status(status)
     return {
@@ -1945,6 +1984,8 @@ def _build_project_task_item_from_path(project_id: str, task_path: str) -> Optio
         "status_bucket": status_bucket,
         "lane": _task_lane_from_bucket(status_bucket),
         "channel_name": str(channel_name or "").strip(),
+        "created_at": task_meta.get("created_at") or "",
+        "due": task_meta.get("due") or "",
         "updated_at": updated_at,
         "updated_ts": updated_ts,
         "exists": True,
@@ -2940,6 +2981,7 @@ def _heartbeat_tasks_for_write(raw_tasks: Any) -> list[dict[str, Any]]:
                 "daily_time": str(row.get("daily_time") or ""),
                 "weekdays": list(row.get("weekdays") or []),
                 "busy_policy": str(row.get("busy_policy") or "run_on_next_idle"),
+                "max_execute_count": max(0, int(row.get("max_execute_count") or 0)),
                 "context_scope": _normalize_heartbeat_context_scope(row.get("context_scope")),
             }
         )
@@ -4316,6 +4358,9 @@ def _sanitize_receipt_summary(value: Any) -> Optional[dict[str, Any]]:
         trigger_type = _safe_text(technical.get("trigger_type"), 80).strip().lower()
         if trigger_type:
             t["trigger_type"] = trigger_type
+        invalid_terminal_preview_reason = _safe_text(technical.get("invalid_terminal_preview_reason"), 80).strip().lower()
+        if invalid_terminal_preview_reason:
+            t["invalid_terminal_preview_reason"] = invalid_terminal_preview_reason
         source_run_ids = technical.get("source_run_ids")
         if isinstance(source_run_ids, list):
             vals: list[str] = []
@@ -4468,6 +4513,13 @@ def _extract_run_extra_fields(payload: dict[str, Any]) -> dict[str, Any]:
     if message_kind:
         out["message_kind"] = message_kind
 
+    interaction_mode = _safe_text(
+        _pick_payload_value(obj, extra_obj, "interaction_mode", "interactionMode"),
+        80,
+    ).strip().lower()
+    if interaction_mode in {"dialog_now", "task_with_receipt", "notify_only"}:
+        out["interaction_mode"] = interaction_mode
+
     receipt_summary = _sanitize_receipt_summary(
         _pick_payload_value(obj, extra_obj, "receipt_summary", "receiptSummary")
     )
@@ -4603,6 +4655,13 @@ def _sanitize_run_extra_meta(extra_meta: Any) -> dict[str, Any]:
     if message_kind:
         out["message_kind"] = message_kind
 
+    interaction_mode = _safe_text(
+        src.get("interaction_mode") if "interaction_mode" in src else src.get("interactionMode"),
+        80,
+    ).strip().lower()
+    if interaction_mode in {"dialog_now", "task_with_receipt", "notify_only"}:
+        out["interaction_mode"] = interaction_mode
+
     plan_first = src.get("plan_first") if "plan_first" in src else src.get("planFirst")
     if isinstance(plan_first, bool):
         if plan_first:
@@ -4620,6 +4679,10 @@ def _sanitize_run_extra_meta(extra_meta: Any) -> dict[str, Any]:
     plan_prompt_version = _safe_text(src.get("plan_prompt_version"), 40).strip().lower()
     if plan_prompt_version:
         out["plan_prompt_version"] = plan_prompt_version
+
+    task_with_receipt_guard_version = _safe_text(src.get("task_with_receipt_guard_version"), 40).strip().lower()
+    if task_with_receipt_guard_version:
+        out["task_with_receipt_guard_version"] = task_with_receipt_guard_version
 
     event_type = _safe_text(src.get("event_type"), 40).strip().lower()
     if event_type:
@@ -4792,6 +4855,10 @@ def _sanitize_run_extra_meta(extra_meta: Any) -> dict[str, Any]:
     if callback_anchor_action:
         out["callback_anchor_action"] = callback_anchor_action
 
+    display_host_run_id = _safe_text(src.get("display_host_run_id"), 80).strip()
+    if display_host_run_id:
+        out["display_host_run_id"] = display_host_run_id
+
     communication_view = src.get("communication_view")
     if isinstance(communication_view, dict):
         cv: dict[str, Any] = {}
@@ -4871,14 +4938,27 @@ def _build_plan_first_prefix() -> str:
 def _apply_plan_first_to_message(message: Any, run_extra_meta: Any) -> tuple[str, dict[str, Any]]:
     raw_message = _safe_text(message, 20_000).strip()
     clean_meta = _sanitize_run_extra_meta(run_extra_meta)
-    if not bool(clean_meta.get("plan_first")):
-        return raw_message, clean_meta
-    if not str(clean_meta.get("plan_phase") or "").strip():
-        clean_meta["plan_phase"] = "planning"
-    if not str(clean_meta.get("plan_prompt_version") or "").strip():
-        clean_meta["plan_prompt_version"] = _PLAN_FIRST_PROMPT_VERSION
-    if not raw_message:
-        return raw_message, clean_meta
-    if _PLAN_FIRST_MARKER in raw_message:
-        return raw_message, clean_meta
-    return f"{_build_plan_first_prefix()}\n\n{raw_message}", clean_meta
+    interaction_mode = str(clean_meta.get("interaction_mode") or "").strip().lower()
+
+    if bool(clean_meta.get("plan_first")):
+        if not str(clean_meta.get("plan_phase") or "").strip():
+            clean_meta["plan_phase"] = "planning"
+        if not str(clean_meta.get("plan_prompt_version") or "").strip():
+            clean_meta["plan_prompt_version"] = _PLAN_FIRST_PROMPT_VERSION
+        if raw_message and _PLAN_FIRST_MARKER not in raw_message:
+            raw_message = f"{_build_plan_first_prefix()}\n\n{raw_message}"
+
+    if raw_message and interaction_mode == "task_with_receipt":
+        if _TASK_WITH_RECEIPT_GUARD_MARKER not in raw_message:
+            raw_message = (
+                f"{raw_message}\n\n"
+                f"{_TASK_WITH_RECEIPT_GUARD_MARKER}\n"
+                "- 本轮结论只允许基于当前回执任务与当前消息主线；历史错线 run 只能排除，不能当成本主线结果。\n"
+                "- 禁止轮询当前执行 run 自己的 `.runtime/.runs/*.json/.last.txt/.log.txt` 来判断“是否已完成”。\n"
+                "- 若当前 run 仍在执行，禁止把“本 run 仍在 running / 等待本 run 完成 / 等待当前 run 落盘”写成最终回执。\n"
+                "- 若证据不足，请直接回单一阻塞，不要用自引用中间态补位。"
+            )
+        if not str(clean_meta.get("task_with_receipt_guard_version") or "").strip():
+            clean_meta["task_with_receipt_guard_version"] = _TASK_WITH_RECEIPT_GUARD_VERSION
+
+    return raw_message, clean_meta

@@ -14,19 +14,6 @@
       const convWrap = document.getElementById("convWrap");
       const ccbBox = document.getElementById("ccbBox");
 
-      if (STATE.selectedSessionId && STATE.panelMode !== "conv") {
-        if (metaEl) metaEl.style.display = "none";
-        if (exEl) exEl.style.display = "none";
-        if (moreEl) moreEl.style.display = "none";
-        if (detailTaskPushBtn) detailTaskPushBtn.style.display = "none";
-        if (detailTaskScheduleBtn) detailTaskScheduleBtn.style.display = "none";
-        if (detailMemoBtn) detailMemoBtn.style.display = "";
-        if (ccbBox) ccbBox.style.display = "none";
-        if (convWrap) convWrap.classList.add("show");
-        renderConversationDetail();
-        return;
-      }
-
       if (STATE.panelMode === "conv") {
         if (convWrap) convWrap.classList.add("show");
         if (metaEl) metaEl.style.display = "none";
@@ -73,8 +60,15 @@
       }
 
       if (!it) {
-        titleEl.textContent = scopeChannel ? ("未选择事项（" + scopeChannel + "）") : "未选择事项";
-        if (subEl) subEl.textContent = "";
+        if (STATE.panelMode === "channel") {
+          titleEl.textContent = scopeChannel ? ("未选择文件（" + scopeChannel + "）") : "未选择文件";
+          if (subEl) subEl.textContent = "当前通道仅展示文件资料与知识沉淀。";
+          setMarkdown(exEl, "", "(点击左侧文件资料或下方知识沉淀，在此查看详情)");
+        } else {
+          titleEl.textContent = scopeChannel ? ("未选择事项（" + scopeChannel + "）") : "未选择事项";
+          if (subEl) subEl.textContent = "";
+          setMarkdown(exEl, "", "(点击列表任意行，在此查看详情)");
+        }
         if (detailTaskPushBtn) {
           detailTaskPushBtn.style.display = "none";
           detailTaskPushBtn.onclick = null;
@@ -83,7 +77,6 @@
           detailTaskScheduleBtn.style.display = "none";
           detailTaskScheduleBtn.onclick = null;
         }
-        setMarkdown(exEl, "", "(点击列表任意行，在此查看详情)");
 
         if (scopeProject && Array.isArray(scopeProject.links) && scopeProject.links.length) {
           metaEl.appendChild(chip(scopeProject.name || scopeProject.id, "muted"));
@@ -138,7 +131,7 @@
       if (STATE.view === "work" && itemPath && isTaskItem(it)) {
         const currentStatus = it.status || parseStatusFromTitle(it.title) || "待处理";
         const statusSelector = createStatusSelector(currentStatus, itemPath, (result) => {
-          STATE.selectedPath = result.new_path || "";
+          setSelectedTaskRef(result.new_path || "", taskStableIdOfItem(it));
           render();
         });
         metaEl.appendChild(statusSelector);
@@ -146,18 +139,23 @@
 
       if (STATE.project === "overview") metaEl.appendChild(chip(it.project_name || it.project_id, "muted"));
       metaEl.appendChild(chip(it.channel || "未归类", "muted"));
+      const isChannelFileMode = STATE.panelMode === "channel" && !isTaskItem(it);
       const primaryStatus = taskPrimaryStatus(it);
       const flags = taskStatusFlags(it);
-      metaEl.appendChild(chip(primaryStatus || bucket, taskPrimaryTone(primaryStatus || bucket)));
-      if (flags.supervised) metaEl.appendChild(chip("关注", "bad"));
-      if (flags.blocked) metaEl.appendChild(chip("阻塞", "bad"));
-      if (isTaskItem(it) && primaryStatus === "进行中") {
+      if (isChannelFileMode) {
+        metaEl.appendChild(chip(inferKnowledgeGroupLabel(it), "muted"));
+      } else {
+        metaEl.appendChild(chip(primaryStatus || bucket, taskPrimaryTone(primaryStatus || bucket)));
+      }
+      if (!isChannelFileMode && flags.supervised) metaEl.appendChild(chip("关注", "bad"));
+      if (!isChannelFileMode && flags.blocked) metaEl.appendChild(chip("阻塞", "bad"));
+      if (!isChannelFileMode && isTaskItem(it) && primaryStatus === "进行中") {
         const autoState = taskAutoKickoffStateForTask(it);
         metaEl.appendChild(chip("首发:" + autoState.label, autoState.tone));
       }
-      if (it.code) metaEl.appendChild(chip(it.code, "muted"));
+      if (it.code && !isChannelFileMode) metaEl.appendChild(chip(it.code, "muted"));
       if (isTaskScheduledByItem(it)) metaEl.appendChild(chip("已排期", "good"));
-      if (it.owner) metaEl.appendChild(chip("负责人:" + it.owner, "muted"));
+      if (it.owner && !isChannelFileMode) metaEl.appendChild(chip("负责Agent:" + it.owner, "muted"));
       if (it.due) metaEl.appendChild(chip("截止:" + it.due, "warn"));
       if (it.updated_at) metaEl.appendChild(chip("更新:" + it.updated_at, "muted"));
       if (scopeProject && Array.isArray(scopeProject.links) && scopeProject.links.length) {

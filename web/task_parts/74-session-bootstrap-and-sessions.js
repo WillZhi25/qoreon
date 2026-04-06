@@ -84,6 +84,38 @@
       }
     }
 
+    function sessionCreateChannelNotFound(resp, payload) {
+      const body = (payload && typeof payload === "object") ? payload : {};
+      const detail = (body && typeof body.detail === "object") ? body.detail : null;
+      const raw = [
+        body.error,
+        body.message,
+        detail && detail.error,
+        detail && detail.message,
+      ].filter(Boolean).join(" | ").toLowerCase();
+      return Number((resp && resp.status) || 0) === 404 && raw.indexOf("channel not found") >= 0;
+    }
+
+    async function postSessionCreateWithChannelRetry(payload) {
+      let retried = false;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const resp = await fetch("/api/sessions", {
+          method: "POST",
+          headers: authHeaders({ "Content-Type": "application/json" }),
+          body: JSON.stringify(payload),
+        });
+        const json = await resp.json().catch(() => ({}));
+        if (resp.ok) return { resp, json, retried };
+        if (attempt === 0 && sessionCreateChannelNotFound(resp, json)) {
+          retried = true;
+          await new Promise((resolve) => setTimeout(resolve, 700));
+          continue;
+        }
+        return { resp, json, retried };
+      }
+      return { resp: null, json: {}, retried };
+    }
+
     function resolveConversationSessionPresentation(raw, channelName, sessionId) {
       const alias = String((raw && raw.alias) || "").trim();
       const channel = String(channelName || "").trim();
@@ -123,6 +155,197 @@
       };
     }
 
+    function normalizeConversationTaskOwner(raw) {
+      const src = (raw && typeof raw === "object") ? raw : {};
+      const state = String(src.state || "missing").trim().toLowerCase();
+      return {
+        agent_name: String(src.agent_name || src.agentName || "").trim(),
+        alias: String(src.alias || "").trim(),
+        session_id: firstNonEmptyText([src.session_id, src.sessionId]) || null,
+        state: ["confirmed", "pending", "missing"].includes(state) ? state : "missing",
+      };
+    }
+
+    function normalizeConversationTaskRoleMember(raw) {
+      const src = (raw && typeof raw === "object") ? raw : {};
+      const name = String(firstNonEmptyText([src.name, src.slot_name, src.slotName]) || "").trim();
+      const agentName = String(firstNonEmptyText([src.agent_name, src.agentName]) || "").trim();
+      const agentAlias = String(firstNonEmptyText([src.agent_alias, src.agentAlias, src.alias]) || "").trim();
+      const displayName = String(firstNonEmptyText([
+        src.display_name,
+        src.displayName,
+        agentAlias,
+        agentName,
+        name,
+      ]) || "").trim();
+      const channelName = String(firstNonEmptyText([src.channel_name, src.channelName]) || "").trim();
+      const sessionId = firstNonEmptyText([src.session_id, src.sessionId]) || null;
+      const responsibility = String(src.responsibility || src.description || "").trim();
+      const source = String(firstNonEmptyText([src.source, src.member_source, src.memberSource]) || "").trim();
+      if (!displayName && !channelName && !sessionId && !responsibility) return null;
+      return {
+        name,
+        display_name: displayName || name || agentAlias || agentName,
+        channel_name: channelName,
+        agent_name: agentName,
+        agent_alias: agentAlias,
+        session_id: sessionId,
+        responsibility,
+        source,
+      };
+    }
+
+    function normalizeConversationTaskRoleMemberList(raw) {
+      const list = Array.isArray(raw) ? raw : ((raw && typeof raw === "object") ? [raw] : []);
+      return list.map(normalizeConversationTaskRoleMember).filter(Boolean);
+    }
+
+    function normalizeConversationTaskCustomRole(raw) {
+      const src = (raw && typeof raw === "object") ? raw : {};
+      const name = String(firstNonEmptyText([
+        src.name,
+        src.role_name,
+        src.roleName,
+        src.slot_name,
+        src.slotName,
+        src.label,
+      ]) || "").trim();
+      const members = normalizeConversationTaskRoleMemberList(
+        src.members || src.member_list || src.memberList || src.items || src.entries || src.agents || null
+      );
+      const responsibility = String(src.responsibility || src.description || "").trim();
+      const source = String(src.source || "").trim();
+      if (!name && !members.length && !responsibility) return null;
+      return {
+        name: name || "自定义责任位",
+        members,
+        responsibility,
+        source,
+      };
+    }
+
+    function normalizeConversationTaskHarnessRoles(raw) {
+      const src = (raw && typeof raw === "object") ? raw : {};
+      const managementRaw = src.management_slot || src.managementSlot
+        || (src.management && (src.management.members || src.management.items))
+        || null;
+      const customRolesRaw = src.custom_roles || src.customRoles || null;
+      const out = {
+        main_owner: normalizeConversationTaskRoleMember(src.main_owner || src.mainOwner || null),
+        collaborators: normalizeConversationTaskRoleMemberList(src.collaborators || null),
+        validators: normalizeConversationTaskRoleMemberList(src.validators || null),
+        challengers: normalizeConversationTaskRoleMemberList(src.challengers || null),
+        backup_owners: normalizeConversationTaskRoleMemberList(src.backup_owners || src.backupOwners || null),
+        management_slot: normalizeConversationTaskRoleMemberList(managementRaw),
+        custom_roles: (Array.isArray(customRolesRaw) ? customRolesRaw : [])
+          .map(normalizeConversationTaskCustomRole)
+          .filter(Boolean),
+      };
+      if (!out.main_owner
+        && !out.collaborators.length
+        && !out.validators.length
+        && !out.challengers.length
+        && !out.backup_owners.length
+        && !out.management_slot.length
+        && !out.custom_roles.length) {
+        return null;
+      }
+      return out;
+    }
+
+    function normalizeConversationTaskRef(raw, fallbackRelation = "") {
+      const src = (raw && typeof raw === "object") ? raw : {};
+      const taskId = String(firstNonEmptyText([src.task_id, src.taskId]) || "").trim();
+      const parentTaskId = String(firstNonEmptyText([src.parent_task_id, src.parentTaskId]) || "").trim();
+      const taskPath = String(firstNonEmptyText([src.task_path, src.taskPath]) || "").trim();
+      const taskTitle = String(firstNonEmptyText([src.task_title, src.taskTitle]) || "").trim();
+      if (!taskId && !taskPath && !taskTitle) return null;
+      const harnessRoles = normalizeConversationTaskHarnessRoles(src);
+      return {
+        task_id: taskId,
+        parent_task_id: parentTaskId,
+        task_path: taskPath,
+        task_title: taskTitle || taskPath || taskId,
+        task_primary_status: String(firstNonEmptyText([src.task_primary_status, src.taskPrimaryStatus]) || "").trim(),
+        created_at: String(firstNonEmptyText([src.created_at, src.createdAt]) || "").trim(),
+        due: String(firstNonEmptyText([src.due, src.due_at, src.dueAt]) || "").trim(),
+        relation: String(firstNonEmptyText([src.relation, fallbackRelation]) || "tracking").trim().toLowerCase() || "tracking",
+        source: String(src.source || "system_merge").trim() || "system_merge",
+        first_seen_at: String(firstNonEmptyText([src.first_seen_at, src.firstSeenAt]) || "").trim(),
+        last_seen_at: String(firstNonEmptyText([src.last_seen_at, src.lastSeenAt]) || "").trim(),
+        latest_action_at: String(firstNonEmptyText([src.latest_action_at, src.latestActionAt]) || "").trim(),
+        latest_action_kind: String(firstNonEmptyText([src.latest_action_kind, src.latestActionKind]) || "").trim().toLowerCase(),
+        latest_action_text: String(firstNonEmptyText([src.latest_action_text, src.latestActionText]) || "").trim(),
+        task_summary_text: String(firstNonEmptyText([src.task_summary_text, src.taskSummaryText]) || "").trim(),
+        is_current: boolLike(firstNonEmptyText([src.is_current, src.isCurrent])),
+        next_owner: normalizeConversationTaskOwner(src.next_owner || src.nextOwner || null),
+        main_owner: harnessRoles ? harnessRoles.main_owner : null,
+        collaborators: harnessRoles ? harnessRoles.collaborators : [],
+        validators: harnessRoles ? harnessRoles.validators : [],
+        challengers: harnessRoles ? harnessRoles.challengers : [],
+        backup_owners: harnessRoles ? harnessRoles.backup_owners : [],
+        management_slot: harnessRoles ? harnessRoles.management_slot : [],
+        custom_roles: harnessRoles ? harnessRoles.custom_roles : [],
+      };
+    }
+
+    function normalizeConversationTaskAction(raw) {
+      const src = (raw && typeof raw === "object") ? raw : {};
+      const taskId = String(firstNonEmptyText([src.task_id, src.taskId]) || "").trim();
+      const parentTaskId = String(firstNonEmptyText([src.parent_task_id, src.parentTaskId]) || "").trim();
+      const taskPath = String(firstNonEmptyText([src.task_path, src.taskPath]) || "").trim();
+      const taskTitle = String(firstNonEmptyText([src.task_title, src.taskTitle]) || "").trim();
+      if (!taskId && !taskPath && !taskTitle) return null;
+      return {
+        task_id: taskId,
+        parent_task_id: parentTaskId,
+        task_path: taskPath,
+        task_title: taskTitle || taskPath || taskId,
+        action_kind: String(firstNonEmptyText([src.action_kind, src.actionKind]) || "update").trim().toLowerCase() || "update",
+        action_text: String(firstNonEmptyText([src.action_text, src.actionText]) || "").trim(),
+        status: String(src.status || "").trim().toLowerCase(),
+        source_run_id: String(firstNonEmptyText([src.source_run_id, src.sourceRunId]) || "").trim(),
+        callback_run_id: String(firstNonEmptyText([src.callback_run_id, src.callbackRunId]) || "").trim(),
+        source_channel: String(firstNonEmptyText([src.source_channel, src.sourceChannel]) || "").trim(),
+        source_agent_name: String(firstNonEmptyText([src.source_agent_name, src.sourceAgentName]) || "").trim(),
+        at: String(src.at || "").trim(),
+      };
+    }
+
+    function normalizeTaskTrackingClient(raw) {
+      const src = (raw && typeof raw === "object") ? raw : {};
+      const currentTask = normalizeConversationTaskRef(src.current_task_ref || src.currentTaskRef || null, "current");
+      const conversationTaskRefs = (Array.isArray(src.conversation_task_refs) ? src.conversation_task_refs : [])
+        .map((row) => normalizeConversationTaskRef(row, "tracking"))
+        .filter(Boolean);
+      const recentTaskActions = (Array.isArray(src.recent_task_actions) ? src.recent_task_actions : [])
+        .map(normalizeConversationTaskAction)
+        .filter(Boolean);
+      const version = String(src.version || "").trim();
+      const updatedAt = String(firstNonEmptyText([src.updated_at, src.updatedAt]) || "").trim();
+      if (!version && !updatedAt && !currentTask && !conversationTaskRefs.length && !recentTaskActions.length) {
+        return null;
+      }
+      return {
+        version: version || "v1.1",
+        current_task_ref: currentTask,
+        conversation_task_refs: conversationTaskRefs,
+        recent_task_actions: recentTaskActions,
+        updated_at: updatedAt,
+      };
+    }
+
+    function hasConversationTaskTrackingData(raw) {
+      const normalized = normalizeTaskTrackingClient(raw);
+      return !!(normalized && (
+        normalized.version
+        || normalized.updated_at
+        || normalized.current_task_ref
+        || normalized.conversation_task_refs.length
+        || normalized.recent_task_actions.length
+      ));
+    }
+
     function ensureConversationSessionDirectoryStateMaps() {
       if (!PCONV.sessionDirectoryByProject || typeof PCONV.sessionDirectoryByProject !== "object") {
         PCONV.sessionDirectoryByProject = Object.create(null);
@@ -133,6 +356,141 @@
       if (!PCONV.sessionDirectoryPromiseByProject || typeof PCONV.sessionDirectoryPromiseByProject !== "object") {
         PCONV.sessionDirectoryPromiseByProject = Object.create(null);
       }
+      if (!PCONV.sessionFetchPromiseByKey || typeof PCONV.sessionFetchPromiseByKey !== "object") {
+        PCONV.sessionFetchPromiseByKey = Object.create(null);
+      }
+      if (!PCONV.sessionFetchCacheByKey || typeof PCONV.sessionFetchCacheByKey !== "object") {
+        PCONV.sessionFetchCacheByKey = Object.create(null);
+      }
+    }
+
+    function ensureConversationSessionDetailStateMaps() {
+      if (!PCONV.sessionDetailPromiseById || typeof PCONV.sessionDetailPromiseById !== "object") {
+        PCONV.sessionDetailPromiseById = Object.create(null);
+      }
+      if (!PCONV.sessionDetailLoadedAtById || typeof PCONV.sessionDetailLoadedAtById !== "object") {
+        PCONV.sessionDetailLoadedAtById = Object.create(null);
+      }
+      if (!PCONV.sessionDetailErrorById || typeof PCONV.sessionDetailErrorById !== "object") {
+        PCONV.sessionDetailErrorById = Object.create(null);
+      }
+    }
+
+    function isConversationSessionDetailLoading(sessionId) {
+      const sid = String(sessionId || "").trim();
+      if (!sid) return false;
+      ensureConversationSessionDetailStateMaps();
+      return !!PCONV.sessionDetailPromiseById[sid];
+    }
+
+    function getConversationSessionDetailError(sessionId) {
+      const sid = String(sessionId || "").trim();
+      if (!sid) return "";
+      ensureConversationSessionDetailStateMaps();
+      return String(PCONV.sessionDetailErrorById[sid] || "").trim();
+    }
+
+    function mergeConversationSessionDetailIntoStore(detail, sessionId = "") {
+      const base = (detail && typeof detail === "object") ? detail : {};
+      const sid = String(firstNonEmptyText([sessionId, base.sessionId, base.id]) || "").trim();
+      if (!sid) return null;
+      const prev = typeof findConversationSessionById === "function"
+        ? findConversationSessionById(sid)
+        : null;
+      const merged = normalizeConversationSession({
+        ...(prev || {}),
+        id: sid,
+        sessionId: sid,
+        alias: firstNonEmptyText([base.alias, prev && prev.alias]),
+        channel_name: firstNonEmptyText([base.channel_name, prev && prev.channel_name, prev && prev.primaryChannel]),
+        channels: Array.isArray(prev && prev.channels) ? prev.channels.slice() : [],
+        primaryChannel: firstNonEmptyText([base.channel_name, prev && prev.primaryChannel]),
+        display_name: firstNonEmptyText([base.display_name, base.displayName, prev && prev.displayName]),
+        displayNameSource: firstNonEmptyText([base.display_name_source, base.displayNameSource, prev && prev.displayNameSource]),
+        codexTitle: firstNonEmptyText([base.codex_title, base.codexTitle, prev && prev.codexTitle]),
+        environment: firstNonEmptyText([base.environment, prev && prev.environment], "stable"),
+        worktree_root: firstNonEmptyText([base.worktree_root, prev && prev.worktree_root]),
+        workdir: firstNonEmptyText([base.workdir, prev && prev.workdir]),
+        branch: firstNonEmptyText([base.branch, prev && prev.branch]),
+        cli_type: firstNonEmptyText([base.cli_type, prev && prev.cli_type], "codex"),
+        model: normalizeSessionModel(firstNonEmptyText([base.model, prev && prev.model])),
+        reasoning_effort: normalizeReasoningEffort(firstNonEmptyText([base.reasoning_effort, prev && prev.reasoning_effort])),
+        status: firstNonEmptyText([base.status, prev && prev.status], "active"),
+        created_at: firstNonEmptyText([base.created_at, prev && prev.created_at]),
+        last_used_at: firstNonEmptyText([base.last_used_at, prev && prev.last_used_at]),
+        is_primary: Object.prototype.hasOwnProperty.call(base, "is_primary")
+          ? !!base.is_primary
+          : !!(prev && prev.is_primary),
+        source: firstNonEmptyText([base.source, prev && prev.source]),
+        runtime_state: base.runtime_state || (prev && prev.runtime_state) || null,
+        heartbeat_summary: base.heartbeat_summary || (prev && prev.heartbeat_summary) || null,
+        project_execution_context: base.project_execution_context || (prev && prev.project_execution_context) || null,
+        task_tracking: hasConversationTaskTrackingData(base.task_tracking)
+          ? base.task_tracking
+          : (prev && prev.task_tracking),
+      });
+      if (!merged) return null;
+      let replaced = false;
+      for (let i = 0; i < PCONV.sessions.length; i += 1) {
+        if (String(getSessionId(PCONV.sessions[i]) || "").trim() !== sid) continue;
+        PCONV.sessions[i] = merged;
+        replaced = true;
+        break;
+      }
+      if (!replaced) PCONV.sessions.push(merged);
+      ensureConversationSessionDetailStateMaps();
+      PCONV.sessionDetailLoadedAtById[sid] = Date.now();
+      delete PCONV.sessionDetailErrorById[sid];
+      return merged;
+    }
+
+    async function ensureConversationSessionDetailLoaded(sessionId, opts = {}) {
+      const sid = String(sessionId || "").trim();
+      if (!looksLikeSessionId(sid)) return null;
+      ensureConversationSessionDetailStateMaps();
+      const force = !!opts.force;
+      const maxAgeMsRaw = Number(opts.maxAgeMs || 0);
+      const maxAgeMs = Number.isFinite(maxAgeMsRaw) && maxAgeMsRaw > 0 ? maxAgeMsRaw : 0;
+      const current = typeof findConversationSessionById === "function"
+        ? findConversationSessionById(sid)
+        : null;
+      const loadedAt = Number(PCONV.sessionDetailLoadedAtById[sid] || 0);
+      if (
+        !force
+        && hasConversationTaskTrackingData(current && current.task_tracking)
+        && loadedAt > 0
+        && (!maxAgeMs || (Date.now() - loadedAt) < maxAgeMs)
+      ) {
+        return current;
+      }
+      if (PCONV.sessionDetailPromiseById[sid]) return PCONV.sessionDetailPromiseById[sid];
+      PCONV.sessionDetailPromiseById[sid] = (async () => {
+        try {
+          const resp = await fetch("/api/sessions/" + encodeURIComponent(sid), {
+            cache: "no-store",
+            headers: authHeaders(),
+          });
+          const payload = await resp.json().catch(() => null);
+          if (!resp.ok) {
+            throw new Error(String((payload && (payload.error || payload.message)) || ("读取会话详情失败（HTTP " + resp.status + "）")));
+          }
+          const fallback = current || { sessionId: sid, id: sid };
+          const normalized = typeof normalizeSessionInfoResponse === "function"
+            ? normalizeSessionInfoResponse(payload, fallback)
+            : normalizeConversationSessionDetail(payload, fallback);
+          const merged = mergeConversationSessionDetailIntoStore(normalized, sid);
+          if (String(STATE.selectedSessionId || "").trim() === sid && typeof renderConversationDetail === "function") {
+            renderConversationDetail(false);
+          }
+          return merged;
+        } catch (err) {
+          PCONV.sessionDetailErrorById[sid] = err && err.message ? String(err.message) : "读取会话详情失败";
+          throw err;
+        } finally {
+          delete PCONV.sessionDetailPromiseById[sid];
+        }
+      })();
+      return PCONV.sessionDetailPromiseById[sid];
     }
 
     function markConversationSessionDirectoryMeta(projectId, extra = {}) {
@@ -160,9 +518,12 @@
         const presentation = resolveConversationSessionPresentation(s, channelName, sid);
         const runtimeState = normalizeRuntimeState(s.runtime_state || s.runtimeState || null);
         const latestRunSummary = normalizeLatestRunSummary(s.latest_run_summary || s.latestRunSummary || null);
-        const sessionDisplayState = normalizeDisplayState(
-          firstNonEmptyText([s.session_display_state, s.sessionDisplayState, runtimeState.display_state]) || "idle",
-          "idle"
+        const latestEffectiveRunSummary = normalizeLatestEffectiveRunSummary(
+          s.latest_effective_run_summary || s.latestEffectiveRunSummary || null
+        );
+        const sessionHealthState = normalizeSessionHealthState(
+          firstNonEmptyText([s.session_health_state, s.sessionHealthState]),
+          ""
         );
         const rawHeartbeat = (s.heartbeat && typeof s.heartbeat === "object") ? s.heartbeat : {};
         const heartbeatItems = Array.isArray(rawHeartbeat.items)
@@ -172,7 +533,11 @@
           s.heartbeat_summary || s.heartbeatSummary || rawHeartbeat.summary || {},
           heartbeatItems
         );
-        return {
+        const preferSyntheticPreviewSender = sessionUsesSyntheticPreviewSender({
+          latest_run_summary: latestRunSummary,
+          latest_effective_run_summary: latestEffectiveRunSummary,
+        }, latestEffectiveRunSummary.preview || "");
+        const baseSession = {
           sessionId: String(sid || ""),
           id: String(sid || ""),
           project_id: pid,
@@ -197,40 +562,85 @@
           is_primary: !!s.is_primary,
           source: String(s.source || ""),
           lastActiveAt: String(s.lastActiveAt || latestRunSummary.updated_at || s.last_used_at || ""),
-          lastStatus: sessionDisplayState,
-          lastPreview: String(s.lastPreview || latestRunSummary.preview || ""),
+          lastStatus: "idle",
+          lastPreview: String(latestEffectiveRunSummary.preview || s.lastPreview || latestRunSummary.preview || ""),
           lastTimeout: false,
           lastError: String(s.lastError || latestRunSummary.error || ""),
           lastErrorHint: "",
-          lastSpeaker: String(s.lastSpeaker || latestRunSummary.speaker || "assistant"),
-          lastSenderType: String(s.lastSenderType || latestRunSummary.sender_type || "legacy"),
-          lastSenderName: String(s.lastSenderName || latestRunSummary.sender_name || ""),
-          lastSenderSource: String(s.lastSenderSource || latestRunSummary.sender_source || "legacy"),
+          lastSpeaker: String(s.lastSpeaker || (preferSyntheticPreviewSender ? "assistant" : (latestRunSummary.speaker || "assistant")) || "assistant"),
+          lastSenderType: String(s.lastSenderType || (preferSyntheticPreviewSender ? "" : (latestRunSummary.sender_type || "legacy"))),
+          lastSenderName: String(s.lastSenderName || (preferSyntheticPreviewSender ? "" : (latestRunSummary.sender_name || ""))),
+          lastSenderSource: String(s.lastSenderSource || (preferSyntheticPreviewSender ? "" : (latestRunSummary.sender_source || "legacy"))),
           runCount: Math.max(0, Number(s.runCount || latestRunSummary.run_count || 0) || 0),
           latestUserMsg: String(s.latestUserMsg || latestRunSummary.latest_user_msg || ""),
           latestAiMsg: String(s.latestAiMsg || latestRunSummary.latest_ai_msg || ""),
-          session_display_state: sessionDisplayState,
+          session_health_state: sessionHealthState,
+          session_display_state: normalizeDisplayState(
+            firstNonEmptyText([s.session_display_state, s.sessionDisplayState, runtimeState.display_state]) || "idle",
+            "idle"
+          ),
           session_display_reason: String(firstNonEmptyText([s.session_display_reason, s.sessionDisplayReason]) || ""),
           latest_run_summary: latestRunSummary,
+          latest_effective_run_summary: latestEffectiveRunSummary,
           runtime_state: runtimeState,
           heartbeat_summary: heartbeatSummary,
+          task_tracking: normalizeTaskTrackingClient(s.task_tracking || s.taskTracking || null),
         };
+        baseSession.lastStatus = getSessionDisplayState(baseSession);
+        return baseSession;
       });
     }
 
-    async function fetchConversationSessionsFromApi(projectId, channelName) {
+    function conversationSessionFetchKey(projectId, channelName) {
+      const pid = String(projectId || "").trim();
+      const channel = String(channelName || "").trim();
+      return pid + "::" + channel;
+    }
+
+    async function fetchConversationSessionsFromApi(projectId, channelName, opts = {}) {
       const pid = String(projectId || "").trim();
       if (!pid || pid === "overview") return [];
+      ensureConversationSessionDirectoryStateMaps();
+      const force = !!(opts && opts.force);
+      const freshnessMsRaw = Number((opts && opts.freshnessMs) || 0);
+      const freshnessMs = Number.isFinite(freshnessMsRaw) && freshnessMsRaw > 0 ? freshnessMsRaw : 0;
+      const key = conversationSessionFetchKey(pid, channelName);
+      const cached = !force ? PCONV.sessionFetchCacheByKey[key] : null;
+      if (
+        !force
+        && freshnessMs > 0
+        && cached
+        && Array.isArray(cached.sessions)
+        && (Date.now() - Number(cached.loadedAt || 0)) < freshnessMs
+      ) {
+        return cached.sessions.slice();
+      }
+      if (!force && PCONV.sessionFetchPromiseByKey[key]) {
+        return PCONV.sessionFetchPromiseByKey[key];
+      }
       const qs = new URLSearchParams();
       qs.set("project_id", pid);
       if (channelName) qs.set("channel_name", String(channelName));
-      const r = await fetch("/api/sessions?" + qs.toString(), { cache: "no-store" });
-      if (!r.ok) {
-        throw new Error("loadChannelSessions failed: " + String(r.status || "unknown"));
-      }
-      const j = await r.json();
-      const sessions = Array.isArray(j && j.sessions) ? j.sessions : [];
-      return formatConversationSessionsFromApi(pid, sessions);
+      const task = (async () => {
+        const r = await fetch("/api/sessions?" + qs.toString(), { cache: "no-store" });
+        if (!r.ok) {
+          throw new Error("loadChannelSessions failed: " + String(r.status || "unknown"));
+        }
+        const j = await r.json();
+        const sessions = formatConversationSessionsFromApi(
+          pid,
+          Array.isArray(j && j.sessions) ? j.sessions : []
+        );
+        PCONV.sessionFetchCacheByKey[key] = {
+          loadedAt: Date.now(),
+          sessions: sessions.slice(),
+        };
+        return sessions.slice();
+      })().finally(() => {
+        delete PCONV.sessionFetchPromiseByKey[key];
+      });
+      PCONV.sessionFetchPromiseByKey[key] = task;
+      return task;
     }
 
     async function ensureConversationProjectSessionDirectory(projectId, opts = {}) {
@@ -250,7 +660,7 @@
       }
       const task = (async () => {
         try {
-          const serverSessions = await fetchConversationSessionsFromApi(pid, "");
+          const serverSessions = await fetchConversationSessionsFromApi(pid, "", { force });
           const merged = mergeConversationSessions(configuredProjectConversations(pid), serverSessions);
           PCONV.sessionDirectoryByProject[pid] = merged.slice();
           markConversationSessionDirectoryMeta(pid, {
@@ -276,6 +686,52 @@
       })();
       PCONV.sessionDirectoryPromiseByProject[pid] = task;
       return task;
+    }
+
+    function buildExistingSessionAttachPayload(options) {
+      const opts = options || {};
+      return {
+        project_id: String(opts.projectId || "").trim(),
+        channel_name: String(opts.channelName || "").trim(),
+        mode: "attach_existing",
+        session_id: String(opts.sessionId || "").trim(),
+        cli_type: String(opts.cliType || "codex").trim() || "codex",
+        model: normalizeSessionModel(opts.model || ""),
+        alias: String(opts.alias || "").trim(),
+        purpose: String(opts.purpose || "").trim(),
+        session_role: String(opts.sessionRole || "child").trim() || "child",
+        reuse_strategy: "attach_existing",
+        set_as_primary: String(opts.sessionRole || "child").trim() === "primary",
+        environment: normalizeSessionEnvironmentValue(opts.environment || "stable"),
+        worktree_root: String(opts.worktreeRoot || "").trim(),
+        workdir: String(opts.workdir || "").trim(),
+        branch: String(opts.branch || "").trim(),
+      };
+    }
+
+    async function recoverTimeoutCreatedSession(options) {
+      const attachPayload = buildExistingSessionAttachPayload(options);
+      const { resp, json, retried } = await postSessionCreateWithChannelRetry(attachPayload);
+      const session = json && json.session;
+      const sid = String((session && session.id) || attachPayload.session_id || "").trim();
+      if (!resp || !resp.ok || !sid) {
+        const detail = json && (json.error || json.message || (json.detail && (json.detail.error || json.detail.message)));
+        return {
+          ok: false,
+          sid,
+          session,
+          json,
+          retried: !!retried,
+          error: String(detail || "unknown"),
+        };
+      }
+      return {
+        ok: true,
+        sid,
+        session,
+        json,
+        retried: !!retried,
+      };
     }
 
     async function createNewConversation() {
@@ -310,6 +766,22 @@
       const workdir = String((workdirInput && workdirInput.value) || "").trim();
       const branch = String((branchInput && branchInput.value) || "").trim();
       const initMessage = String((initMessageInput && initMessageInput.value) || "").trim();
+      const pendingDraft = mode === "create" ? {
+        mode: "create",
+        projectId: pid,
+        channelName: ch,
+        cliType: cli,
+        model,
+        alias,
+        purpose,
+        sessionRole,
+        reuseStrategy,
+        environment,
+        worktreeRoot,
+        workdir,
+        branch,
+        initMessage,
+      } : null;
 
       if (!pid || pid === "overview") {
         newConvModalError("请选择项目");
@@ -326,6 +798,7 @@
         createBtn.textContent = mode === "attach" ? "绑定中..." : "创建中...";
       }
       newConvModalError("");
+      let pendingBlockId = "";
 
       try {
         let sid = "";
@@ -339,34 +812,104 @@
           if (!meta.available) return String(baseTip || "");
           return String(baseTip || "") + " 上下文来源：" + String((meta.sourceMeta && meta.sourceMeta.text) || "待返回") + "。";
         };
+        const reportCreateFailure = (message) => {
+          const detailText = String(message || "创建失败").trim() || "创建失败";
+          if (mode === "create" && pendingBlockId) {
+            markConversationPendingCreateBlockFailed(pid, pendingBlockId, detailText, pendingDraft);
+            setHintText(STATE.panelMode, "创建失败，可在失败块中重试。");
+            render();
+            return true;
+          }
+          newConvModalError("创建失败：" + detailText);
+          return false;
+        };
+        const injectCreatedConversationSession = () => {
+          if (!sid) return;
+          const nowIso = new Date().toISOString();
+          const baseSessions = Array.isArray(PCONV.sessionDirectoryByProject && PCONV.sessionDirectoryByProject[pid])
+            ? PCONV.sessionDirectoryByProject[pid].slice()
+            : (
+              pid === String(PCONV.lastProjectId || "")
+              && Array.isArray(PCONV.sessions)
+                ? PCONV.sessions.filter((session) => !isConversationPendingCreateSession(session))
+                : configuredProjectConversations(pid)
+            );
+          const merged = mergeConversationSessions(baseSessions, [{
+            id: sid,
+            session_id: sid,
+            sessionId: sid,
+            project_id: pid,
+            projectId: pid,
+            channel_name: ch,
+            channelName: ch,
+            primaryChannel: ch,
+            channels: ch ? [ch] : [],
+            cli_type: effectiveCli,
+            cliType: effectiveCli,
+            model,
+            alias,
+            purpose,
+            session_role: sessionRole,
+            sessionRole,
+            is_primary: sessionRole === "primary",
+            isPrimary: sessionRole === "primary",
+            environment,
+            worktree_root: worktreeRoot,
+            workdir,
+            branch,
+            source: "ui-create-pending",
+            lastActiveAt: nowIso,
+            created_at: nowIso,
+          }]);
+          if (Array.isArray(merged) && merged.length) {
+            if (!PCONV.sessionDirectoryByProject || typeof PCONV.sessionDirectoryByProject !== "object") {
+              PCONV.sessionDirectoryByProject = Object.create(null);
+            }
+            PCONV.sessionDirectoryByProject[pid] = merged;
+            if (pid === String(PCONV.lastProjectId || "")) {
+              PCONV.sessions = merged.slice();
+            }
+          }
+        };
+
+        if (mode === "create") {
+          pendingBlockId = String(NEW_CONV_UI.retryPendingBlockId || "").trim()
+            || ("pending-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8));
+          upsertConversationPendingCreateBlock({
+            id: pendingBlockId,
+            projectId: pid,
+            channelName: ch,
+            state: "creating",
+            error: "",
+            submittedAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            formDraft: pendingDraft,
+          });
+          closeNewConvModal();
+          setHintText(STATE.panelMode, "已提交创建，正在接入通道对话…");
+          render();
+        }
 
         if (mode === "attach") {
           if (!looksLikeSessionId(sidFromInput)) {
             newConvModalError("Session ID 格式不正确（支持 UUID 或 ses_...）。");
             return;
           }
-          const r = await fetch("/api/sessions", {
-            method: "POST",
-            headers: authHeaders({ "Content-Type": "application/json" }),
-            body: JSON.stringify({
-              project_id: pid,
-              channel_name: ch,
-              mode: "attach_existing",
-              session_id: sidFromInput,
-              cli_type: cli,
-              model,
-              alias,
-              purpose,
-              session_role: sessionRole,
-              reuse_strategy: "attach_existing",
-              set_as_primary: sessionRole === "primary",
-              environment,
-              worktree_root: worktreeRoot,
-              workdir,
-              branch,
-            }),
+          const attachPayload = buildExistingSessionAttachPayload({
+            projectId: pid,
+            channelName: ch,
+            sessionId: sidFromInput,
+            cliType: cli,
+            model,
+            alias,
+            purpose,
+            sessionRole,
+            environment,
+            worktreeRoot,
+            workdir,
+            branch,
           });
-          const j = await r.json().catch(() => ({}));
+          const { resp: r, json: j, retried: attachRetried } = await postSessionCreateWithChannelRetry(attachPayload);
           if (!r.ok) {
             const detail = j && (j.error || j.message || (j.detail && (j.detail.error || j.detail.message)));
             newConvModalError("补登记失败：" + String(detail || "unknown"));
@@ -397,29 +940,26 @@
               if (modelUpdated) tip = "已绑定已有对话，并更新模型配置。";
             }
             tip = appendContextHint(tip, probePayload);
+            if (attachRetried) tip += " 已自动等待通道注册生效。";
           }
         } else {
           // 调用新的 POST /api/sessions API 创建会话
-          const r = await fetch("/api/sessions", {
-            method: "POST",
-            headers: authHeaders({ "Content-Type": "application/json" }),
-            body: JSON.stringify({
-              project_id: pid,
-              channel_name: ch,
-              cli_type: cli,
-              model,
-              alias,
-              purpose,
-              session_role: sessionRole,
-              reuse_strategy: reuseStrategy,
-              set_as_primary: sessionRole === "primary",
-              environment,
-              worktree_root: worktreeRoot,
-              workdir,
-              branch,
-            }),
-          });
-          const j = await r.json().catch(() => ({}));
+          const createPayload = {
+            project_id: pid,
+            channel_name: ch,
+            cli_type: cli,
+            model,
+            alias,
+            purpose,
+            session_role: sessionRole,
+            reuse_strategy: reuseStrategy,
+            set_as_primary: sessionRole === "primary",
+            environment,
+            worktree_root: worktreeRoot,
+            workdir,
+            branch,
+          };
+          const { resp: r, json: j, retried: createRetried } = await postSessionCreateWithChannelRetry(createPayload);
           if (!r.ok) {
             const detailObj = (j && typeof j.detail === "object") ? j.detail : null;
             const timeoutErr = String(
@@ -443,24 +983,52 @@
               detailStr = String(detail || "unknown");
             }
             if (!sid) {
-              newConvModalError("创建失败：" + detailStr);
+              reportCreateFailure(detailStr);
               return;
             }
           }
           const session = j && j.session;
           if (!sid) sid = session && session.id ? String(session.id).trim() : "";
           if (!sid) {
-            newConvModalError("创建失败：未获取到 session_id");
+            reportCreateFailure("未获取到 session_id");
             return;
           }
-          if (session && session.cli_type) effectiveCli = String(session.cli_type);
+          let recoveredSessionPayload = session || j || null;
+          let attachRetried = false;
+          if (timeoutRecovered) {
+            const recovered = await recoverTimeoutCreatedSession({
+              projectId: pid,
+              channelName: ch,
+              sessionId: sid,
+              cliType: effectiveCli,
+              model,
+              alias,
+              purpose,
+              sessionRole,
+              environment,
+              worktreeRoot,
+              workdir,
+              branch,
+            });
+            if (!recovered.ok) {
+              reportCreateFailure("创建超时后补登记失败：" + String(recovered.error || "unknown"));
+              return;
+            }
+            sid = String(recovered.sid || sid).trim();
+            attachRetried = !!recovered.retried;
+            recoveredSessionPayload = recovered.session || recovered.json || recoveredSessionPayload;
+          }
+          const effectiveSession = recoveredSessionPayload && recoveredSessionPayload.session
+            ? recoveredSessionPayload.session
+            : recoveredSessionPayload;
+          if (effectiveSession && effectiveSession.cli_type) effectiveCli = String(effectiveSession.cli_type);
           const ok = await setBinding(pid, ch, sid, effectiveCli);
           if (!ok) {
-            newConvModalError("创建成功但绑定失败：请检查 Token 或服务状态后重试绑定。");
+            reportCreateFailure("创建成功但绑定失败：请检查 Token 或服务状态后重试绑定。");
             return;
           }
           tip = timeoutRecovered
-            ? "已完成 timeout-recovered 绑定。"
+            ? "已完成 timeout-recovered 补登记并绑定。"
             : (j && j.reused ? "已复用并绑定现有对话。" : "已创建并绑定新对话。");
           if (initMessage) {
             if (createBtn) createBtn.textContent = "首发中...";
@@ -472,20 +1040,21 @@
                 ? await sendNewConversationInitMessage(pid, ch, sid, effectiveCli, msgs[1], model)
                 : { ok: false };
               if (sendA.ok && sendB.ok) {
-                tip = (timeoutRecovered ? "已完成 timeout-recovered 绑定，" : "已创建并绑定新对话，") + "并自动发送两条标准首发消息。";
+                tip = (timeoutRecovered ? "已完成 timeout-recovered 补登记并绑定，" : "已创建并绑定新对话，") + "并自动发送两条标准首发消息。";
               } else {
-                tip = (timeoutRecovered ? "已完成 timeout-recovered 绑定，" : "已创建并绑定新对话，") + "但标准首发消息发送不完整，请手动补发。";
+                tip = (timeoutRecovered ? "已完成 timeout-recovered 补登记并绑定，" : "已创建并绑定新对话，") + "但标准首发消息发送不完整，请手动补发。";
               }
             } else {
               const sendRet = await sendNewConversationInitMessage(pid, ch, sid, effectiveCli, initMessage, model);
               if (sendRet.ok) {
-                tip = (timeoutRecovered ? "已完成 timeout-recovered 绑定，" : "已创建并绑定新对话，") + "并自动发送初始化消息。";
+                tip = (timeoutRecovered ? "已完成 timeout-recovered 补登记并绑定，" : "已创建并绑定新对话，") + "并自动发送初始化消息。";
               } else {
-                tip = (timeoutRecovered ? "已完成 timeout-recovered 绑定，" : "已创建并绑定新对话，") + "但初始化消息发送失败，请手动发送。";
+                tip = (timeoutRecovered ? "已完成 timeout-recovered 补登记并绑定，" : "已创建并绑定新对话，") + "但初始化消息发送失败，请手动发送。";
               }
             }
           }
-          tip = appendContextHint(tip, session || j || null);
+          if (createRetried || attachRetried) tip += " 已自动等待通道注册生效。";
+          tip = appendContextHint(tip, effectiveSession || j || null);
         }
 
         const visRet = await verifySessionBindingVisibility(pid, ch, sid);
@@ -493,13 +1062,30 @@
           tip += " 已自动重建看板；请按 Cmd+Shift+R 强刷后确认可见性。";
         }
 
-        closeNewConvModal();
+        if (mode === "create" && pendingBlockId) {
+          injectCreatedConversationSession();
+          removeConversationPendingCreateBlock(pid, pendingBlockId);
+          setSelectedSessionId(sid, true, { explicit: true });
+          render();
+        } else {
+          closeNewConvModal();
+        }
         await refreshConversationPanel();
         setSelectedSessionId(sid, true, { explicit: true });
         setHintText(STATE.panelMode, tip);
         render();
       } catch (err) {
-        newConvModalError((mode === "attach" ? "绑定失败：" : "创建失败：") + "网络或服务异常");
+        if (mode === "create") {
+          if (pendingBlockId) {
+            markConversationPendingCreateBlockFailed(pid, pendingBlockId, "网络或服务异常", pendingDraft);
+            setHintText(STATE.panelMode, "创建失败，可在失败块中重试。");
+            render();
+          } else {
+            newConvModalError("创建失败：网络或服务异常");
+          }
+        } else {
+          newConvModalError("绑定失败：网络或服务异常");
+        }
       } finally {
         if (createBtn) {
           createBtn.disabled = false;
@@ -509,17 +1095,34 @@
     }
 
     // 加载指定通道的会话列表
-    async function loadChannelSessions(projectId, channelName) {
+    async function loadChannelSessions(projectId, channelName, opts = {}) {
       if (!projectId || projectId === "overview") {
         PCONV.sessions = [];
         return;
       }
       try {
-        const formatted = await fetchConversationSessionsFromApi(projectId, channelName);
+        const existingSessions = Array.isArray(PCONV.sessions) ? PCONV.sessions.slice() : [];
+        const existingById = new Map();
+        existingSessions.forEach((row) => {
+          const normalized = normalizeConversationSession(row);
+          if (!normalized) return;
+          existingById.set(normalized.sessionId, normalized);
+        });
+        const formatted = (await fetchConversationSessionsFromApi(projectId, channelName, {
+          force: !!(opts && opts.force),
+          freshnessMs: Number.isFinite(Number((opts && opts.freshnessMs) || 0))
+            ? Number((opts && opts.freshnessMs) || 0)
+            : (channelName ? 800 : 1200),
+        }))
+          .map((row) => preserveConversationSessionDetailFields(
+            row,
+            existingById.get(String((row && (row.sessionId || row.id || row.session_id)) || "").trim()) || null
+          ))
+          .filter(Boolean);
         // 更新 PCONV.sessions
         if (channelName) {
           // 只更新当前通道的会话，保留其他通道的会话
-          const otherSessions = PCONV.sessions.filter(s => s.channel_name !== channelName);
+          const otherSessions = existingSessions.filter(s => s.channel_name !== channelName);
           PCONV.sessions = [...otherSessions, ...formatted];
         } else {
           PCONV.sessions = formatted;
@@ -536,6 +1139,96 @@
       } catch (err) {
         console.error("loadChannelSessions error:", err);
       }
+    }
+
+    function normalizeTeamExpansionHintState(raw) {
+      const text = String(raw || "").trim().toLowerCase();
+      if (text === "hidden") return "hidden";
+      if (text === "first_agent_ready_pending_team_setup") return "first_agent_ready_pending_team_setup";
+      if (text === "team_setup_in_progress") return "team_setup_in_progress";
+      if (text === "team_setup_done") return "team_setup_done";
+      if (text === "blocked") return "blocked";
+      return "";
+    }
+
+    function normalizeConversationTeamExpansionHint(raw) {
+      const src = (raw && typeof raw === "object") ? raw : {};
+      const directHint = (src.team_expansion_hint && typeof src.team_expansion_hint === "object")
+        ? src.team_expansion_hint
+        : ((src.teamExpansionHint && typeof src.teamExpansionHint === "object") ? src.teamExpansionHint : {});
+      const execContext = (src.project_execution_context && typeof src.project_execution_context === "object")
+        ? src.project_execution_context
+        : (((src.projectExecutionContext && typeof src.projectExecutionContext === "object")
+          ? src.projectExecutionContext
+          : {}));
+      const execHint = (execContext.team_expansion_hint && typeof execContext.team_expansion_hint === "object")
+        ? execContext.team_expansion_hint
+        : ((execContext.teamExpansionHint && typeof execContext.teamExpansionHint === "object") ? execContext.teamExpansionHint : {});
+      const stateCandidates = [
+        src.team_expansion_hint_state,
+        src.teamExpansionHintState,
+        directHint.state,
+        directHint.hint_state,
+        directHint.hintState,
+        execContext.team_expansion_hint_state,
+        execContext.teamExpansionHintState,
+        execHint.state,
+        execHint.hint_state,
+        execHint.hintState,
+      ];
+      const prompt = String(firstNonEmptyText([
+        src.team_expansion_hint_prompt,
+        src.teamExpansionHintPrompt,
+        directHint.prompt,
+        directHint.prompt_text,
+        directHint.promptText,
+        execContext.team_expansion_hint_prompt,
+        execContext.teamExpansionHintPrompt,
+        execHint.prompt,
+        execHint.prompt_text,
+        execHint.promptText,
+      ]) || "").trim();
+      const summary = String(firstNonEmptyText([
+        src.team_expansion_hint_summary,
+        src.teamExpansionHintSummary,
+        directHint.summary,
+        directHint.description,
+        directHint.desc,
+        execContext.team_expansion_hint_summary,
+        execContext.teamExpansionHintSummary,
+        execHint.summary,
+        execHint.description,
+        execHint.desc,
+      ]) || "").trim();
+      const blockedSummary = String(firstNonEmptyText([
+        src.team_expansion_hint_blocked_summary,
+        src.teamExpansionHintBlockedSummary,
+        directHint.blocked_summary,
+        directHint.blockedSummary,
+        directHint.block_reason,
+        directHint.blockReason,
+        execContext.team_expansion_hint_blocked_summary,
+        execContext.teamExpansionHintBlockedSummary,
+        execHint.blocked_summary,
+        execHint.blockedSummary,
+        execHint.block_reason,
+        execHint.blockReason,
+      ]) || "").trim();
+      const explicit = stateCandidates.some((value) => String(value || "").trim() !== "");
+      const state = normalizeTeamExpansionHintState(firstNonEmptyText(stateCandidates));
+      if (!explicit && !prompt && !summary && !blockedSummary) return null;
+      return {
+        explicit: explicit || !!state,
+        state: state || "",
+        prompt,
+        summary,
+        blocked_summary: blockedSummary,
+      };
+    }
+
+    function hasConversationTeamExpansionHintData(rawHint) {
+      const hint = (rawHint && typeof rawHint === "object") ? rawHint : null;
+      return !!(hint && hint.explicit);
     }
 
     function normalizeConversationSession(raw) {
@@ -559,6 +1252,7 @@
         raw.heartbeat_summary || raw.heartbeatSummary || rawHeartbeat.summary || {},
         heartbeatItems
       );
+      const teamExpansionHint = normalizeConversationTeamExpansionHint(raw);
 
       return {
         sessionId: sid,
@@ -592,7 +1286,12 @@
           firstNonEmptyText([raw.session_display_state, raw.sessionDisplayState, raw.lastStatus]) || "idle",
           "idle"
         ),
-        lastPreview: String(raw.lastPreview || normalizeLatestRunSummary(raw.latest_run_summary || raw.latestRunSummary || null).preview || ""),
+        lastPreview: String(
+          normalizeLatestEffectiveRunSummary(raw.latest_effective_run_summary || raw.latestEffectiveRunSummary || null).preview
+          || raw.lastPreview
+          || normalizeLatestRunSummary(raw.latest_run_summary || raw.latestRunSummary || null).preview
+          || ""
+        ),
         lastTimeout: boolLike(raw.lastTimeout || raw.last_timeout),
         lastError: String(raw.lastError || raw.last_error || ""),
         lastErrorHint: String(raw.lastErrorHint || raw.last_error_hint || ""),
@@ -619,6 +1318,29 @@
         project_execution_context: normalizeProjectExecutionContext(
           raw.project_execution_context || raw.projectExecutionContext || null
         ),
+        team_expansion_hint: teamExpansionHint,
+        task_tracking: normalizeTaskTrackingClient(raw.task_tracking || raw.taskTracking || null),
+      };
+    }
+
+    function preserveConversationSessionDetailFields(nextRaw, prevRaw) {
+      const next = normalizeConversationSession(nextRaw);
+      if (!next) return null;
+      const prev = normalizeConversationSession(prevRaw);
+      if (!prev || prev.sessionId !== next.sessionId) return next;
+      const nextExecContext = buildProjectExecutionContextMeta(next.project_execution_context || null);
+      const prevExecContext = buildProjectExecutionContextMeta(prev.project_execution_context || null);
+      return {
+        ...next,
+        project_execution_context: nextExecContext.available
+          ? next.project_execution_context
+          : (prevExecContext.available ? prev.project_execution_context : next.project_execution_context),
+        team_expansion_hint: hasConversationTeamExpansionHintData(next.team_expansion_hint)
+          ? next.team_expansion_hint
+          : (hasConversationTeamExpansionHintData(prev.team_expansion_hint) ? prev.team_expansion_hint : null),
+        task_tracking: hasConversationTaskTrackingData(next.task_tracking)
+          ? next.task_tracking
+          : (hasConversationTaskTrackingData(prev.task_tracking) ? prev.task_tracking : null),
       };
     }
 
@@ -660,6 +1382,12 @@
         const nextRuntime = normalizeRuntimeState(n.runtime_state || n.runtimeState || null);
         const nextExecContext = buildProjectExecutionContextMeta(n.project_execution_context || null);
         const prevExecContext = buildProjectExecutionContextMeta(prev.project_execution_context || null);
+        const nextTeamExpansionHint = hasConversationTeamExpansionHintData(n.team_expansion_hint)
+          ? n.team_expansion_hint
+          : (hasConversationTeamExpansionHintData(prev.team_expansion_hint) ? prev.team_expansion_hint : null);
+        const nextTaskTracking = hasConversationTaskTrackingData(n.task_tracking)
+          ? n.task_tracking
+          : (hasConversationTaskTrackingData(prev.task_tracking) ? prev.task_tracking : null);
         const nextDisplayState = normalizeDisplayState(
           firstNonEmptyText([n.session_display_state, n.sessionDisplayState, nextRuntime.display_state]) || "idle",
           "idle"
@@ -699,7 +1427,7 @@
           session_display_reason: firstNonEmptyText([n.session_display_reason, prev.session_display_reason]),
           latest_run_summary: n.latest_run_summary || prev.latest_run_summary || normalizeLatestRunSummary(null),
           lastStatus: nextDisplayState,
-          lastPreview: String(n.lastPreview || prev.lastPreview || ""),
+          lastPreview: String(getSessionPrimaryPreviewText(n) || getSessionPrimaryPreviewText(prev) || n.lastPreview || prev.lastPreview || ""),
           lastError: String(n.lastError || prev.lastError || ""),
           lastSpeaker: String(n.lastSpeaker || prev.lastSpeaker || "assistant"),
           lastSenderType: String(n.lastSenderType || prev.lastSenderType || "legacy"),
@@ -716,6 +1444,8 @@
           project_execution_context: nextExecContext.available
             ? n.project_execution_context
             : (prevExecContext.available ? prev.project_execution_context : n.project_execution_context),
+          team_expansion_hint: nextTeamExpansionHint,
+          task_tracking: nextTaskTracking,
         });
       }
 

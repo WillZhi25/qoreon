@@ -38,6 +38,7 @@ from task_dashboard.helpers import (
 )
 from task_dashboard.parser_md import extract_field, parse_leading_tags
 from task_dashboard.runtime.channel_admin import resolve_task_root_path as runtime_resolve_task_root_path
+from task_dashboard.runtime.run_state_semantics import build_session_semantics, classify_run_semantics
 from task_dashboard.runtime.session_display_state import (
     build_latest_run_summary as _session_display_build_latest_run_summary,
     build_session_display_fields as _session_display_build_fields,
@@ -929,6 +930,7 @@ class HeartbeatTaskRuntimeRegistry:
                     self._dispatch_task(pid, row, trigger="schedule", respect_busy_policy=True)
 
 _CODEX_HISTORY_TITLE_CACHE_LOCK = threading.Lock()
+_RUN_SESSION_SEMANTICS_REENTRY = threading.local()
 _CODEX_HISTORY_TITLE_CACHE: dict[str, Any] = {
     "path": "",
     "mtime_ns": -1,
@@ -1590,14 +1592,45 @@ def _infer_blocked_by_run_id(store: "RunStore", meta: dict[str, Any]) -> str:
     return ""
 
 
+def _build_session_run_semantics_cached(
+    store: "RunStore",
+    *,
+    project_id: str,
+    session_id: str,
+) -> dict[str, Any]:
+    pid = str(project_id or "").strip()
+    sid = str(session_id or "").strip()
+    if not (pid and sid):
+        return {
+            "run_fields": {},
+            "session_health_state": "healthy",
+            "latest_effective_run_summary": {},
+            "latest_system_summary": {},
+        }
+    previous = bool(getattr(_RUN_SESSION_SEMANTICS_REENTRY, "active", False))
+    _RUN_SESSION_SEMANTICS_REENTRY.active = True
+    try:
+        runs = store.list_runs(
+            project_id=pid,
+            session_id=sid,
+            limit=_session_runtime_scan_limit(),
+            include_payload=False,
+        )
+    finally:
+        _RUN_SESSION_SEMANTICS_REENTRY.active = previous
+    return build_session_semantics(runs)
+
+
 def _build_run_observability_fields(
     store: "RunStore",
     meta: dict[str, Any],
     *,
     infer_blocked: bool = True,
+    include_session_semantics: bool = True,
 ) -> dict[str, Any]:
     st = str(meta.get("status") or "").strip().lower()
     display_state = _run_status_display_state(st)
+    run_semantics = classify_run_semantics(meta)
     queue_reason = str(meta.get("queueReason") or meta.get("queue_reason") or "").strip().lower()
     blocked_by_run_id = str(meta.get("blockedByRunId") or meta.get("blocked_by_run_id") or "").strip()
     if infer_blocked and (not blocked_by_run_id) and st in {"queued", "retry_waiting"} and queue_reason != "session_busy_external":
@@ -1607,10 +1640,34 @@ def _build_run_observability_fields(
             queue_reason = "session_serial" if blocked_by_run_id else ""
         elif st == "retry_waiting":
             queue_reason = "retry_waiting"
+    project_id = str(meta.get("projectId") or "").strip()
+    session_id = str(meta.get("sessionId") or "").strip()
+    run_id = str(meta.get("id") or "").strip()
+    if (
+        include_session_semantics
+        and project_id
+        and session_id
+        and run_id
+        and not bool(getattr(_RUN_SESSION_SEMANTICS_REENTRY, "active", False))
+    ):
+        session_semantics = _build_session_run_semantics_cached(
+            store,
+            project_id=project_id,
+            session_id=session_id,
+        )
+        run_fields = (session_semantics.get("run_fields") or {}).get(run_id)
+        if isinstance(run_fields, dict):
+            run_semantics.update(run_fields)
     return {
         "display_state": display_state,
         "queue_reason": queue_reason,
         "blocked_by_run_id": blocked_by_run_id,
+        "outcome_state": str(run_semantics.get("outcome_state") or "").strip(),
+        "error_class": str(run_semantics.get("error_class") or "").strip(),
+        "effective_for_session_health": bool(run_semantics.get("effective_for_session_health")),
+        "effective_for_session_preview": bool(run_semantics.get("effective_for_session_preview")),
+        "superseded_by_run_id": str(run_semantics.get("superseded_by_run_id") or "").strip(),
+        "recovery_of_run_id": str(run_semantics.get("recovery_of_run_id") or "").strip(),
     }
 
 

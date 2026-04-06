@@ -32,8 +32,15 @@
       const wrap = document.getElementById("systemSettingsWrap");
       const trigger = document.getElementById("systemSettingsTrigger");
       const popover = document.getElementById("systemSettingsPopover");
+      const countEl = trigger && trigger.querySelector(".system-settings-count");
       if (!wrap || !trigger || !popover || wrap.__systemSettingsBound) return;
       wrap.__systemSettingsBound = true;
+
+      const syncSettingsCount = () => {
+        if (!countEl) return;
+        const count = popover.querySelectorAll(".system-settings-item:not([hidden])").length;
+        countEl.textContent = `${count}项`;
+      };
 
       const setOpen = (open) => {
         wrap.classList.toggle("show", !!open);
@@ -59,6 +66,8 @@
       document.addEventListener("keydown", (event) => {
         if (event.key === "Escape") setOpen(false);
       });
+
+      syncSettingsCount();
     }
 
     function openProjectAgentDirectory() {
@@ -1169,8 +1178,10 @@
           showListView();
           // 清除选中状态
           STATE.selectedPath = "";
+          STATE.selectedTaskId = "";
           STATE.selectedSessionId = "";
           STATE.selectedSessionExplicit = false;
+          syncSelectedTaskSelectionStorage();
           updateSelectionUI();
           // 对话模式下需要重新渲染列表
           if (STATE.panelMode === "conv") {
@@ -1225,10 +1236,19 @@
         item.className = "channel-item" + (STATE.channel === chName ? " active" : "");
         item.textContent = chName;
         item.addEventListener("click", async () => {
+          if (STATE.panelMode === "conv" && String(STATE.selectedSessionId || "").trim()) {
+            rememberConversationSelection(
+              String(STATE.project || ""),
+              String(STATE.channel || ""),
+              String(STATE.selectedSessionId || "")
+            );
+          }
           STATE.channel = chName;
           STATE.selectedPath = "";
+          STATE.selectedTaskId = "";
           STATE.selectedSessionId = "";  // 切换通道时清除对话选中状态
           STATE.selectedSessionExplicit = false;
+          syncSelectedTaskSelectionStorage();
           if (nameEl) nameEl.textContent = chName;
           document.getElementById("channelSelector").classList.remove("show");
           // 在对话模式下，切换通道后加载该通道的会话列表
@@ -1238,8 +1258,14 @@
             if (PCONV.sessions.length > 0) {
               const channelSessions = PCONV.sessions.filter((s) => sessionMatchesChannel(s, chName));
               if (channelSessions.length > 0) {
-                STATE.selectedSessionId = pickDefaultConversationSessionId(channelSessions, chName);
-                STATE.selectedSessionExplicit = false;
+                const rememberedSid = readRememberedConversationSelection(STATE.project, chName);
+                const rememberedHit = rememberedSid
+                  ? channelSessions.find((s) => String(getSessionId(s) || "").trim() === rememberedSid)
+                  : null;
+                STATE.selectedSessionId = rememberedHit
+                  ? rememberedSid
+                  : pickDefaultConversationSessionId(channelSessions, chName);
+                STATE.selectedSessionExplicit = !!rememberedHit;
               }
             }
           }
@@ -1849,6 +1875,15 @@
       return String(raw || "").trim() === "agent_assist" ? "agent_assist" : "direct";
     }
 
+    function normalizeNewChannelKindMode(raw) {
+      const value = String(raw || "").trim();
+      return value === "__custom__" || value === "custom" ? "custom" : "preset";
+    }
+
+    function normalizeNewChannelKind(raw) {
+      return String(raw || "").trim().replace(/\s+/g, " ");
+    }
+
     function normalizeNewChannelIndex(raw) {
       return String(raw || "").trim();
     }
@@ -1865,8 +1900,17 @@
       return String(raw || "").trim();
     }
 
+    function resolveNewChannelKind(form) {
+      if (!form || typeof form !== "object") return "";
+      const mode = normalizeNewChannelKindMode(form.channelKindMode || form.channelKind);
+      if (mode === "custom") {
+        return normalizeNewChannelKind(form.channelKindCustom || form.channelKind);
+      }
+      return normalizeNewChannelKind(form.channelKind);
+    }
+
     function buildNewChannelName(form) {
-      const kind = String(form.channelKind || "").trim() || "子级";
+      const kind = resolveNewChannelKind(form) || "业务";
       const idx = String(form.channelIndex || "").trim();
       const topic = String(form.channelName || "").trim();
       const core = [kind + (idx || ""), topic].filter(Boolean).join("-");
@@ -1883,10 +1927,16 @@
     }
 
     function getNewChannelWorkflowForm() {
+      const selectedKind = String(newChannelFieldValue("newChannelKind") || "业务").trim();
+      const kindMode = normalizeNewChannelKindMode(selectedKind);
+      const customKind = normalizeNewChannelKind(newChannelFieldValue("newChannelKindCustom"));
+      const resolvedKind = kindMode === "custom" ? customKind : normalizeNewChannelKind(selectedKind);
       return {
         projectId: String(STATE.project || "").trim(),
         mode: normalizeNewChannelMode(NEW_CHANNEL_UI.mode || "direct"),
-        channelKind: String(newChannelFieldValue("newChannelKind") || "子级").trim(),
+        channelKindMode: kindMode,
+        channelKind: resolvedKind,
+        channelKindCustom: customKind,
         channelIndex: normalizeNewChannelIndex(newChannelFieldValue("newChannelIndex")),
         channelName: normalizeNewChannelNamePart(newChannelFieldValue("newChannelName")),
         channelDesc: normalizeNewChannelText(newChannelFieldValue("newChannelDesc")),
@@ -2307,6 +2357,7 @@
     function renderNewChannelWorkflowUi() {
       renderNewChannelModeUi();
       const form = getNewChannelWorkflowForm();
+      renderNewChannelKindUi(form);
       renderNewChannelDirectPreview(form);
       renderNewChannelAgentPicker();
       const result = document.getElementById("newChannelResult");
@@ -2317,7 +2368,8 @@
 
     function resetNewChannelFormForOpen() {
       const defaults = {
-        newChannelKind: "子级",
+        newChannelKind: "业务",
+        newChannelKindCustom: "",
         newChannelIndex: "",
         newChannelName: "",
         newChannelDesc: "",
@@ -2353,6 +2405,15 @@
       renderNewChannelWorkflowUi();
     }
 
+    function handleNewChannelFormFieldChange() {
+      if (!NEW_CHANNEL_UI.open) return;
+      renderNewChannelWorkflowUi();
+      if (NEW_CHANNEL_UI.phase !== "form") {
+        NEW_CHANNEL_UI.phase = "form";
+        setNewChannelVisible("newChannelReloadBtn", false);
+      }
+    }
+
     function bindNewChannelFormInputs() {
       if (NEW_CHANNEL_UI.inputBound) return;
       NEW_CHANNEL_UI.inputBound = true;
@@ -2370,19 +2431,12 @@
         });
       }
 
-      const ids = ["newChannelKind", "newChannelIndex", "newChannelName", "newChannelDesc", "newChannelRequirement"];
+      const ids = ["newChannelKind", "newChannelKindCustom", "newChannelIndex", "newChannelName", "newChannelDesc", "newChannelRequirement"];
       for (const id of ids) {
         const node = document.getElementById(id);
         if (!node) continue;
         const evt = node.tagName === "SELECT" ? "change" : "input";
-        node.addEventListener(evt, () => {
-          if (!NEW_CHANNEL_UI.open) return;
-          renderNewChannelWorkflowUi();
-          if (NEW_CHANNEL_UI.phase !== "form") {
-            NEW_CHANNEL_UI.phase = "form";
-            setNewChannelVisible("newChannelReloadBtn", false);
-          }
-        });
+        node.addEventListener(evt, handleNewChannelFormFieldChange);
       }
 
       const agentCard = document.getElementById("newChannelAgentCard");
@@ -2436,10 +2490,11 @@
     }
 
     function validateNewChannelForm(form) {
+      const actualKind = resolveNewChannelKind(form);
       const missing = [];
       if (!form.projectId) missing.push("projectId");
       if (!form.mode) missing.push("mode");
-      if (!form.channelKind) missing.push("通道类型");
+      if (!actualKind) missing.push(form.channelKindMode === "custom" ? "自定义类型名称" : "通道类型");
       if (!form.channelIndex) missing.push("通道编号");
       if (!form.channelName) missing.push("业务主题");
       if (form.mode === "agent_assist") {
@@ -2447,12 +2502,22 @@
         if (!String(form.selectedAgentSessionId || "").trim()) missing.push("处理Agent");
       }
       if (missing.length) return "请填写：" + missing.join("、");
-      if (!["子级", "辅助", "主体"].includes(form.channelKind)) return "通道类型仅支持：子级 / 辅助 / 主体";
+      if (/[\/\\:*?"<>|]/.test(actualKind)) return "自定义类型名称不能包含 / \\\\ : * ? \" < > |";
       if (typeof validateNewChannelDuplicateConflict === "function") {
-        const duplicateMsg = String(validateNewChannelDuplicateConflict(form) || "").trim();
+        const duplicateForm = Object.assign({}, form, { channelKind: actualKind });
+        const duplicateMsg = String(validateNewChannelDuplicateConflict(duplicateForm) || "").trim();
         if (duplicateMsg) return duplicateMsg;
       }
       return "";
+    }
+
+    function renderNewChannelKindUi(form) {
+      const mode = normalizeNewChannelKindMode(form && form.channelKindMode);
+      const wrap = document.getElementById("newChannelKindCustomWrap");
+      if (wrap) {
+        wrap.classList.toggle("show", mode === "custom");
+        wrap.style.display = mode === "custom" ? "grid" : "none";
+      }
     }
 
     async function createNewChannel() {
@@ -2486,6 +2551,8 @@
           projectId: form.projectId,
           mode,
           channelKind: form.channelKind,
+          channelKindMode: form.channelKindMode,
+          channelKindCustom: form.channelKindCustom,
           channelIndex: form.channelIndex,
           channelName: form.channelName,
           channelDesc: form.channelDesc || "",
@@ -2510,6 +2577,18 @@
         try { j = await r.json(); } catch (_) {}
         if (!r.ok) {
           const fallback = String((j && (j.message || j.error)) || (await parseResponseDetail(r)) || "").trim();
+          const duplicateConflict = r.status === 409 || /already exists/i.test(fallback);
+          if (duplicateConflict && typeof syncExistingChannelConflictToLocalState === "function") {
+            const healed = await syncExistingChannelConflictToLocalState(form, Object.assign({}, j || {}, {
+              projectId: form.projectId,
+              channelDesc: form.channelDesc || "",
+            }));
+            if (healed) {
+              NEW_CHANNEL_UI.phase = "result";
+              closeNewChannelModal(true);
+              return;
+            }
+          }
           const info = typeof normalizeNewChannelFailureInfo === "function"
             ? normalizeNewChannelFailureInfo(mode, r, j || {}, form)
             : {
@@ -2571,25 +2650,267 @@
       };
     }
 
+    function resolveTaskPrimaryStatusText(raw, fallback = "") {
+      const row = (raw && typeof raw === "object") ? raw : null;
+      const direct = String(firstNonEmptyText([
+        row && row.primary_status,
+        row && row.task_primary_status,
+      ], "") || "").trim();
+      const source = direct || String((row && row.status) || raw || "").trim();
+      const text = String(source || "").trim();
+      if (!text) return String(fallback || "").trim();
+      if (PRIMARY_TASK_STATUSES.includes(text)) return text;
+      if (DONE_STATUSES.has(text) || /(?:已完成|完成|done)/i.test(text)) return "已完成";
+      if (PAUSE_STATUSES.has(text) || /(?:暂停|暂缓|pause|paused)/i.test(text)) return "暂缓";
+      if (/(?:待验收|验收|审核|review)/i.test(text)) return "待验收";
+      if (/(?:进行中|处理中|阻塞|异常|running|in[_-]?progress|confirmed)/i.test(text)) return "进行中";
+      if (/(?:待办|待开始|待处理|todo|pending|queued)/i.test(text)) return "待办";
+      return String(fallback || "待办").trim() || "待办";
+    }
+
+    function taskDisplayStatusMeta(value, fallback = "待办") {
+      const text = resolveTaskPrimaryStatusText(value, fallback);
+      if (text === "进行中") return { text, key: "in_progress", tone: "warn" };
+      if (text === "待验收") return { text, key: "review", tone: "warn" };
+      if (text === "已完成") return { text, key: "done", tone: "good" };
+      if (text === "暂缓") return { text, key: "paused", tone: "muted" };
+      return { text: text || "待办", key: "todo", tone: "muted" };
+    }
+
+    function buildTaskStatusChip(value, fallback = "待办", extraClass = "") {
+      const meta = taskDisplayStatusMeta(value, fallback);
+      return el("span", {
+        class: "chip task-status-chip status-" + meta.key + (extraClass ? " " + extraClass : ""),
+        text: meta.text,
+      });
+    }
+
+    function taskTypeBadgeMeta(raw, opts = {}) {
+      const item = (raw && typeof raw === "object") ? raw : {};
+      const forced = String(opts.force || "").trim().toLowerCase();
+      const relationText = String(firstNonEmptyText([
+        item.relation_label,
+        item.relation,
+      ], "") || "").trim();
+      const isChild = forced === "child" || (
+        forced !== "parent"
+        && (
+          item._isSubtask === true
+          || item.is_subtask === true
+          || item.isSubtask === true
+          || !!String(firstNonEmptyText([
+            item.parent_task_id,
+            item.parentTaskId,
+            item.parent_task_path,
+            item.parentTaskPath,
+          ], "") || "").trim()
+          || /(?:子任务|subtask|child)/i.test(relationText)
+        )
+      );
+      return isChild
+        ? { key: "child", text: "子", title: "子任务" }
+        : { key: "parent", text: "总", title: "总任务" };
+    }
+
+    function buildTaskTypeBadge(raw, opts = {}) {
+      const meta = taskTypeBadgeMeta(raw, opts);
+      return el("span", {
+        class: "task-type-badge is-" + meta.key + (opts.className ? (" " + String(opts.className || "").trim()) : ""),
+        text: meta.text,
+        title: meta.title,
+      });
+    }
+
+    function taskRoleMemberDisplayMeta(rawMember) {
+      if (rawMember == null) {
+        return { text: "", meta: "", sessionId: "", channelName: "", raw: null };
+      }
+      if (typeof rawMember === "string") {
+        const text = String(rawMember || "").trim();
+        return {
+          text,
+          meta: "",
+          sessionId: "",
+          channelName: "",
+          raw: text ? { display_name: text, alias: text, agent_name: text } : null,
+        };
+      }
+      const member = (rawMember && typeof rawMember === "object") ? rawMember : {};
+      const text = String(firstNonEmptyText([
+        member.display_name,
+        member.agent_alias,
+        member.alias,
+        member.agent_name,
+        member.name,
+      ], "") || "").trim();
+      const metaParts = [];
+      const channelName = String(firstNonEmptyText([
+        member.channel_name,
+        member.channelName,
+      ], "") || "").trim();
+      const responsibilityText = String(member.responsibility || "").trim();
+      if (channelName) metaParts.push(channelName);
+      if (responsibilityText) metaParts.push(responsibilityText);
+      return {
+        text,
+        meta: metaParts.join(" · "),
+        sessionId: String(firstNonEmptyText([member.session_id, member.sessionId], "") || "").trim(),
+        channelName,
+        raw: member,
+      };
+    }
+
+    function taskRoleMemberKey(rawMember) {
+      const meta = taskRoleMemberDisplayMeta(rawMember);
+      const member = (meta.raw && typeof meta.raw === "object") ? meta.raw : {};
+      return [
+        meta.sessionId,
+        String(firstNonEmptyText([member.agent_id, member.agentId], "") || "").trim(),
+        meta.text.toLowerCase(),
+        meta.channelName,
+      ].filter(Boolean).join("::");
+    }
+
+    function taskRoleGroups(raw, opts = {}) {
+      const item = (raw && typeof raw === "object") ? raw : {};
+      const fallbackMain = item.main_owner
+        || (item.owner ? { display_name: String(item.owner || "").trim(), alias: String(item.owner || "").trim(), agent_name: String(item.owner || "").trim() } : null)
+        || item.next_owner
+        || null;
+      const groups = [
+        { label: "主", members: fallbackMain ? [fallbackMain] : [] },
+        { label: "管", members: Array.isArray(item.management_slot) ? item.management_slot : [] },
+        { label: "协", members: Array.isArray(item.collaborators) ? item.collaborators : [] },
+        { label: "验", members: Array.isArray(item.validators) ? item.validators : [] },
+      ];
+      return groups.map((group) => {
+        const seen = new Set();
+        const members = [];
+        (Array.isArray(group.members) ? group.members : []).forEach((member) => {
+          const key = taskRoleMemberKey(member);
+          if (!key || seen.has(key)) return;
+          const display = taskRoleMemberDisplayMeta(member);
+          if (!display.text) return;
+          seen.add(key);
+          members.push(member);
+        });
+        return { label: group.label, members };
+      }).filter((group) => group.members.length > 0 || !!opts.includeEmpty);
+    }
+
+    function buildTaskRoleAvatar(member, opts = {}) {
+      const meta = taskRoleMemberDisplayMeta(member);
+      if (!meta.text) return null;
+      const sessionLike = Object.assign({}, (meta.raw && typeof meta.raw === "object") ? meta.raw : {}, {
+        sessionId: meta.sessionId || "",
+        session_id: meta.sessionId || "",
+        alias: meta.text,
+        displayName: meta.text,
+        display_name: meta.text,
+        channel_name: meta.channelName || "",
+        primaryChannel: meta.channelName || "",
+      });
+      const node = typeof buildConversationAvatarNode === "function"
+        ? buildConversationAvatarNode(sessionLike)
+        : el("div", { class: "conv-avatar fallback", text: meta.text.slice(0, 1) || "任" });
+      node.classList.add("task-role-avatar");
+      if (opts.avatarClassName) {
+        String(opts.avatarClassName || "").split(/\s+/).filter(Boolean).forEach((cls) => node.classList.add(cls));
+      }
+      node.title = meta.meta ? (meta.text + " · " + meta.meta) : meta.text;
+      node.setAttribute("aria-label", meta.text);
+      return node;
+    }
+
+    function buildTaskRoleGroups(raw, opts = {}) {
+      const groups = taskRoleGroups(raw, opts);
+      if (!groups.length) return null;
+      const wrap = el("div", {
+        class: "task-role-groups" + (opts.className ? " " + String(opts.className || "").trim() : ""),
+      });
+      groups.forEach((group) => {
+        const block = el("div", { class: "task-role-group" });
+        block.appendChild(el("span", {
+          class: "task-role-group-label",
+          text: group.label,
+        }));
+        const avatars = el("div", { class: "task-role-group-avatars" });
+        group.members.forEach((member) => {
+          const avatar = buildTaskRoleAvatar(member, { avatarClassName: opts.avatarClassName || "" });
+          if (avatar) avatars.appendChild(avatar);
+        });
+        if (avatars.childNodes.length) {
+          block.appendChild(avatars);
+          wrap.appendChild(block);
+        }
+      });
+      return wrap.childNodes.length ? wrap : null;
+    }
+
+    function normalizeTaskSummarySnippet(value, maxLength = 110) {
+      const limit = Math.max(24, Number(maxLength || 0) || 110);
+      const text = String(value || "").trim();
+      if (!text) return "";
+      const skipPlainLine = (line) => /^(?:更新时间|当前项目|主负责通道|主负责Agent|闭环方式|关联任务|需求来源|交付物|回执要求|关键路径(?:或 run_id)?|是否通过或放行|唯一阻塞|下一步动作|验收要点|本轮材料|当前说明|关键证据|执行阶段|本次目标|需要对方|预期结果|非必要问题|状态样本|参考文档)\s*[:：]?\s*$/u.test(line);
+      const stripLeadLabel = (line) => String(line || "")
+        .replace(/^(?:当前结论|执行结论|当前进展|最近进展|任务目标|目标|结论|说明)\s*[:：]\s*/u, "")
+        .trim();
+      const isTaskTitleLine = (line) => /^(?:【[^】]+】\s*){1,4}.*任务/u.test(line) || /^\d{8}(?:[-—].*)?任务/u.test(line);
+      const isBareMetaValue = (line) => /^[A-Za-z0-9_@./-]{1,48}$/u.test(line);
+      const isTrailingLabel = (line) => /^.{1,12}[：:]$/u.test(line);
+      const isPreferredSummaryLine = (line) => /^(?:本任务|当前|已|将|需要|用于|支持|让|解决|修复|升级|改为|回到|保留)/u.test(line)
+        || /(?:解决|修复|升级|支持|进入|改为|回到|保留|统一|补齐|确认|避免|处理)/u.test(line);
+      const cleaned = text
+        .replace(/```[\s\S]*?```/g, " ")
+        .replace(/`([^`]+)`/g, "$1")
+        .replace(/!\[([^\]]*)\]\([^)]+\)/g, "$1")
+        .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+        .replace(/<\/?[^>]+>/g, " ")
+        .replace(/^\s{0,3}#{1,6}\s*/gm, "")
+        .replace(/(?:^|\s)#{1,6}\s+/g, " ")
+        .replace(/^\s*>\s?/gm, "")
+        .replace(/^\s*(?:[-*+]\s+|\d+\.\s+)/gm, "")
+        .replace(/[*_~]+/g, "")
+        .replace(/\|/g, " ")
+        .replace(/\r/g, "\n");
+      const lines = cleaned
+        .split(/\n+/)
+        .map((line) => line.replace(/^\s*(?:[-*+]\s+|\d+\.\s+)+/u, "").replace(/\s+/g, " ").trim())
+        .filter(Boolean);
+      const candidates = lines
+        .map(stripLeadLabel)
+        .filter((line) => line && !skipPlainLine(line) && !isTaskTitleLine(line) && !isBareMetaValue(line) && !isTrailingLabel(line) && !/^\d{8}(?:[-—].*)?$/u.test(line));
+      const preferred = candidates.filter((line) => isPreferredSummaryLine(line));
+      const chosen = [];
+      let chosenLength = 0;
+      for (const line of (preferred.length ? preferred : (candidates.length ? candidates : lines))) {
+        if (!line || skipPlainLine(line)) continue;
+        chosen.push(line);
+        chosenLength += line.length;
+        if (chosenLength >= 42 || chosen.length >= 2) break;
+      }
+      const merged = (chosen.length ? chosen : lines).join(" ").replace(/\s+/g, " ").trim();
+      if (!merged) return "";
+      if (merged.length <= limit) return merged;
+      return merged.slice(0, Math.max(0, limit - 1)).trimEnd() + "…";
+    }
+
+    function taskSummaryText(raw, fallback = "") {
+      const item = (raw && typeof raw === "object") ? raw : {};
+      const text = normalizeTaskSummarySnippet(firstNonEmptyText([
+        item.latest_action_text,
+        item.task_summary_text,
+        item.excerpt,
+      ], ""), 110);
+      return text || normalizeTaskSummarySnippet(fallback, 110);
+    }
+
     function taskPrimaryStatus(it) {
-      const row = (it && typeof it === "object") ? it : null;
-      const direct = String((row && row.primary_status) || "").trim();
-      if (direct) return direct;
-      const raw = String((row && row.status) || it || "").trim();
-      if (!raw) return "";
-      if (DONE_STATUSES.has(raw)) return "已完成";
-      if (PAUSE_STATUSES.has(raw)) return "暂缓";
-      if (raw.includes("待验收")) return "待验收";
-      if (raw.includes("进行中") || raw.includes("阻塞") || raw.includes("异常")) return "进行中";
-      return "待办";
+      return resolveTaskPrimaryStatusText(it, "");
     }
 
     function taskPrimaryTone(status) {
-      const st = String(status || "").trim();
-      if (st === "进行中") return "warn";
-      if (st === "待验收") return "warn";
-      if (st === "已完成") return "good";
-      return "muted";
+      return taskDisplayStatusMeta(status, "待办").tone;
     }
 
     function emptyPrimaryTaskCounts() {
@@ -3078,10 +3399,10 @@
         ? window.location.origin
         : ((window.location.protocol && window.location.host)
           ? `${window.location.protocol}//${window.location.host}`
-          : "http://127.0.0.1:18765");
+          : "");
       return {
-        primary: new URL("/share/avatar-library.html", origin).toString(),
-        fallback: new URL("/dist/avatar-library.html", origin).toString(),
+        primary: origin ? new URL("/share/avatar-library.html", origin).toString() : "/share/avatar-library.html",
+        fallback: origin ? new URL("/dist/avatar-library.html", origin).toString() : "/dist/avatar-library.html",
       };
     }
 
@@ -3253,6 +3574,236 @@
       });
     }
 
+    function ensureConversationPendingCreateStore(projectId = "") {
+      if (!PCONV.pendingCreateBlocksByProject || typeof PCONV.pendingCreateBlocksByProject !== "object") {
+        PCONV.pendingCreateBlocksByProject = Object.create(null);
+      }
+      const pid = String(projectId || "").trim();
+      if (!pid) return [];
+      if (!Array.isArray(PCONV.pendingCreateBlocksByProject[pid])) {
+        PCONV.pendingCreateBlocksByProject[pid] = [];
+      }
+      return PCONV.pendingCreateBlocksByProject[pid];
+    }
+
+    function listConversationPendingCreateBlocks(projectId = "") {
+      return ensureConversationPendingCreateStore(projectId).slice();
+    }
+
+    function upsertConversationPendingCreateBlock(block) {
+      const source = (block && typeof block === "object") ? block : {};
+      const pid = String(source.projectId || source.project_id || "").trim();
+      const id = String(source.id || "").trim();
+      if (!pid || !id) return null;
+      const bucket = ensureConversationPendingCreateStore(pid);
+      const next = {
+        id,
+        projectId: pid,
+        channelName: String(source.channelName || source.channel_name || "").trim(),
+        state: String(source.state || "creating").trim() || "creating",
+        error: String(source.error || "").trim(),
+        submittedAt: String(source.submittedAt || source.submitted_at || new Date().toISOString()).trim(),
+        updatedAt: String(source.updatedAt || source.updated_at || new Date().toISOString()).trim(),
+        formDraft: (source.formDraft && typeof source.formDraft === "object") ? { ...source.formDraft } : null,
+      };
+      const idx = bucket.findIndex((it) => String((it && it.id) || "") === id);
+      if (idx >= 0) bucket[idx] = { ...bucket[idx], ...next };
+      else bucket.unshift(next);
+      return bucket[idx >= 0 ? idx : 0];
+    }
+
+    function markConversationPendingCreateBlockFailed(projectId, blockId, error = "", formDraft = null) {
+      const pid = String(projectId || "").trim();
+      const id = String(blockId || "").trim();
+      if (!pid || !id) return null;
+      const bucket = ensureConversationPendingCreateStore(pid);
+      const idx = bucket.findIndex((it) => String((it && it.id) || "") === id);
+      const next = {
+        id,
+        projectId: pid,
+        state: "failed",
+        error: String(error || "创建失败").trim() || "创建失败",
+        updatedAt: new Date().toISOString(),
+      };
+      if (formDraft && typeof formDraft === "object") next.formDraft = { ...formDraft };
+      if (idx >= 0) {
+        bucket[idx] = { ...bucket[idx], ...next };
+        return bucket[idx];
+      }
+      bucket.unshift({
+        ...next,
+        channelName: String((formDraft && formDraft.channelName) || "").trim(),
+        submittedAt: new Date().toISOString(),
+      });
+      return bucket[0];
+    }
+
+    function removeConversationPendingCreateBlock(projectId, blockId) {
+      const pid = String(projectId || "").trim();
+      const id = String(blockId || "").trim();
+      if (!pid || !id || !PCONV.pendingCreateBlocksByProject) return;
+      const bucket = ensureConversationPendingCreateStore(pid);
+      PCONV.pendingCreateBlocksByProject[pid] = bucket.filter((it) => String((it && it.id) || "") !== id);
+      if (!PCONV.pendingCreateBlocksByProject[pid].length) delete PCONV.pendingCreateBlocksByProject[pid];
+    }
+
+    function isConversationPendingCreateSession(session) {
+      return !!(session && typeof session === "object" && session.__pendingCreate === true);
+    }
+
+    function conversationPendingCreateBlockMeta(session) {
+      if (!isConversationPendingCreateSession(session)) return null;
+      const block = (session.pendingCreate && typeof session.pendingCreate === "object")
+        ? session.pendingCreate
+        : {};
+      return {
+        id: String(block.id || session.pendingCreateId || "").trim(),
+        projectId: String(block.projectId || session.project_id || session.projectId || "").trim(),
+        channelName: String(block.channelName || session.channel_name || "").trim(),
+        state: String(block.state || "creating").trim() || "creating",
+        error: String(block.error || "").trim(),
+        formDraft: (block.formDraft && typeof block.formDraft === "object") ? block.formDraft : null,
+      };
+    }
+
+    function buildConversationPendingCreateSession(block) {
+      const meta = (block && typeof block === "object") ? block : {};
+      const id = String(meta.id || "").trim();
+      const draft = (meta.formDraft && typeof meta.formDraft === "object") ? meta.formDraft : {};
+      const channelName = String(meta.channelName || draft.channelName || "").trim();
+      const alias = String(draft.alias || "").trim();
+      const sessionRole = String(draft.sessionRole || "child").trim() || "child";
+      const cliType = String(draft.cliType || "codex").trim() || "codex";
+      const lastActiveAt = String(meta.updatedAt || meta.submittedAt || new Date().toISOString()).trim();
+      const syntheticId = "pending-create:" + id;
+      return {
+        __pendingCreate: true,
+        pendingCreateId: id,
+        pendingCreate: {
+          ...meta,
+          formDraft: draft,
+        },
+        id: syntheticId,
+        sessionId: syntheticId,
+        session_id: syntheticId,
+        project_id: String(meta.projectId || "").trim(),
+        projectId: String(meta.projectId || "").trim(),
+        channel_name: channelName,
+        channelName,
+        primaryChannel: channelName,
+        channels: channelName ? [channelName] : [],
+        alias,
+        displayName: alias || "新建Agent对话",
+        cli_type: cliType,
+        cliType,
+        model: String(draft.model || "").trim(),
+        session_role: sessionRole,
+        sessionRole,
+        purpose: String(draft.purpose || "").trim(),
+        environment: String(draft.environment || "").trim(),
+        worktree_root: String(draft.worktreeRoot || "").trim(),
+        workdir: String(draft.workdir || "").trim(),
+        branch: String(draft.branch || "").trim(),
+        lastActiveAt,
+        created_at: String(meta.submittedAt || lastActiveAt).trim(),
+      };
+    }
+
+    function conversationPendingCreateSessionsForProject(projectId = "") {
+      const pid = String(projectId || "").trim();
+      if (!pid) return [];
+      return listConversationPendingCreateBlocks(pid)
+        .map((block) => buildConversationPendingCreateSession(block))
+        .filter(Boolean);
+    }
+
+    function buildConversationPendingCreateRow(session, projectId = "") {
+      const meta = conversationPendingCreateBlockMeta(session);
+      const row = el("div", {
+        class: "rowbtn conv-row conv-create-row is-create-" + String((meta && meta.state) || "creating"),
+      });
+      row.appendChild(buildConversationAvatarNode(session));
+      const mainDiv = el("div", { class: "conv-main" });
+      const headRow = el("div", { class: "conv-card-head" });
+      const titleWrap = el("div", { class: "conv-card-titlewrap" });
+      const titleRow = el("div", { class: "conv-title" });
+      const displayName = conversationAgentName(session);
+      titleRow.appendChild(el("span", {
+        class: "conv-name",
+        text: displayName,
+        title: displayName,
+      }));
+      titleWrap.appendChild(titleRow);
+      const metaRow = el("div", { class: "conv-card-submeta" });
+      metaRow.appendChild(buildConversationRoleBadge(session));
+      metaRow.appendChild(buildConversationCliBadge(session));
+      conversationSecondaryMeta(session).forEach((part) => {
+        metaRow.appendChild(el("span", {
+          class: "conv-subchip " + String((part && part.kind) || "").trim(),
+          text: String((part && part.text) || "").trim(),
+        }));
+      });
+      titleWrap.appendChild(metaRow);
+      headRow.appendChild(titleWrap);
+      headRow.appendChild(el("div", { class: "conv-card-side" }, [
+        el("span", {
+          class: "conv-create-badge " + (meta && meta.state === "failed" ? "failed" : "creating"),
+          text: meta && meta.state === "failed" ? "创建失败" : "创建中",
+          title: meta && meta.state === "failed" ? "创建失败" : "正在接入通道对话",
+        }),
+      ]));
+      mainDiv.appendChild(headRow);
+
+      const detail = el("div", {
+        class: "conv-create-detail" + (meta && meta.state === "failed" ? " failed" : ""),
+      });
+      detail.appendChild(el("div", {
+        class: "conv-create-detail-title",
+        text: meta && meta.state === "failed" ? "创建未完成" : "正在接入通道对话",
+      }));
+      detail.appendChild(el("div", {
+        class: "conv-create-detail-text",
+        text: meta && meta.state === "failed"
+          ? (meta.error || "创建失败，请重试。")
+          : "弹框已关闭，当前会话正在创建并等待正式卡片替换。",
+        title: meta && meta.state === "failed" ? (meta.error || "创建失败，请重试。") : "",
+      }));
+      if (meta && meta.state === "failed") {
+        const actions = el("div", { class: "conv-create-actions" });
+        const retryBtn = el("button", {
+          class: "conv-create-action-btn warn",
+          type: "button",
+          text: "重试",
+        });
+        retryBtn.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          openNewConvModal(meta.projectId || projectId || STATE.project || "", meta.channelName || "", "create", {
+            presetDraft: meta.formDraft || null,
+            retryPendingBlockId: meta.id,
+            forceAdvancedOpen: true,
+          });
+        });
+        const closeBtn = el("button", {
+          class: "conv-create-action-btn ghost",
+          type: "button",
+          text: "关闭",
+        });
+        closeBtn.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          removeConversationPendingCreateBlock(meta.projectId || projectId || STATE.project || "", meta.id);
+          render();
+        });
+        actions.appendChild(retryBtn);
+        actions.appendChild(closeBtn);
+        detail.appendChild(actions);
+      }
+      mainDiv.appendChild(detail);
+      row.appendChild(mainDiv);
+      return row;
+    }
+
     function conversationSecondaryMeta(session) {
       const s = (session && typeof session === "object") ? session : {};
       const parts = [];
@@ -3270,7 +3821,22 @@
       const s = (session && typeof session === "object") ? session : {};
       const runtimeState = getSessionRuntimeState(s);
       const effectiveStatus = getSessionStatus(s);
+      const sessionHealthState = getSessionHealthState(s);
       const latestRunSummary = getSessionLatestRunSummary(s);
+      const latestEffectiveRunSummary = getSessionLatestEffectiveRunSummary(s);
+      const latestEffectiveOutcomeState = normalizeRunOutcomeState(
+        latestEffectiveRunSummary && latestEffectiveRunSummary.outcome_state,
+        ""
+      );
+      const latestSummaryStatus = normalizeDisplayState(firstNonEmptyText([
+        latestRunSummary && latestRunSummary.status,
+        latestRunSummary && latestRunSummary.display_state,
+        latestRunSummary && latestRunSummary.displayState,
+      ]), "idle");
+      const latestSummaryRunId = String(firstNonEmptyText([
+        latestRunSummary && latestRunSummary.run_id,
+        latestRunSummary && latestRunSummary.runId,
+      ]) || "").trim();
       const timeoutLike = effectiveStatus === "error" && sessionHasTimeoutState(s);
       if (effectiveStatus === "running" || effectiveStatus === "queued" || effectiveStatus === "retry_waiting" || effectiveStatus === "external_busy") {
         const tone = effectiveStatus === "running"
@@ -3286,6 +3852,19 @@
         if (runtimeState.external_busy && effectiveStatus !== "external_busy") titleParts.push("外部占用");
         if (latestRunSummary.run_id && !runtimeState.active_run_id && !runtimeState.queued_run_id) {
           titleParts.push("最近run: " + shortId(latestRunSummary.run_id));
+        }
+        const hasRuntimePriority = !!(runtimeState.active_run_id || runtimeState.queued_run_id);
+        const staleLatestErrorWhileWorking = latestSummaryStatus === "error"
+          && hasRuntimePriority
+          && (!latestSummaryRunId
+            || (latestSummaryRunId !== String(runtimeState.active_run_id || "").trim()
+              && latestSummaryRunId !== String(runtimeState.queued_run_id || "").trim()));
+        if (staleLatestErrorWhileWorking) {
+          titleParts.push(
+            latestSummaryRunId
+              ? ("上一条 run 异常: " + shortId(latestSummaryRunId))
+              : "上一条 run 状态: 异常"
+          );
         }
         const reason = getSessionDisplayReason(s);
         if (reason) titleParts.push("来源: " + reason);
@@ -3303,11 +3882,53 @@
           title: timeoutTitle ? ("超时摘要：" + timeoutTitle) : "超时",
         };
       }
+      if (effectiveStatus === "interrupted") {
+        const interruptedTitleParts = [];
+        if (latestEffectiveRunSummary.run_id) interruptedTitleParts.push("最近有效 run: " + shortId(latestEffectiveRunSummary.run_id));
+        if (latestEffectiveRunSummary.created_at) interruptedTitleParts.push("时间: " + compactDateTime(latestEffectiveRunSummary.created_at));
+        const terminalHint = String(
+          latestRunSummary.error
+          || s.lastError
+          || s.error
+          || ""
+        ).trim();
+        if (latestEffectiveOutcomeState === "interrupted_infra") {
+          interruptedTitleParts.push("基础设施中断，不按业务失败处理");
+          if (terminalHint) interruptedTitleParts.push(terminalHint);
+          return {
+            text: "环境中断",
+            tone: "external",
+            title: interruptedTitleParts.join("\n"),
+          };
+        }
+        interruptedTitleParts.push("用户或人工操作打断");
+        if (terminalHint) interruptedTitleParts.push(terminalHint);
+        return {
+          text: "已打断",
+          tone: "waiting",
+          title: interruptedTitleParts.join("\n"),
+        };
+      }
       if (effectiveStatus === "error") {
+        const terminalHint = String(latestRunSummary.error || s.lastError || s.error || "").trim();
+        if (sessionHealthState === "blocked" || latestEffectiveOutcomeState === "failed_config") {
+          return {
+            text: "配置阻塞",
+            tone: "error",
+            title: terminalHint || "会话绑定、工作区权限或 CLI 配置存在问题",
+          };
+        }
+        if (sessionHealthState === "attention" && latestEffectiveOutcomeState === "failed_business") {
+          return {
+            text: "业务失败",
+            tone: "error",
+            title: terminalHint || "业务处理失败",
+          };
+        }
         return {
           text: "异常",
           tone: "error",
-          title: String(latestRunSummary.error || s.lastError || s.error || "执行异常").trim(),
+          title: terminalHint || "执行异常",
         };
       }
       return null;
@@ -3530,6 +4151,7 @@
       if (next === STATE.convListLayout) return;
       STATE.convListLayout = next;
       try { localStorage.setItem("taskDashboard.convListLayout", next); } catch (_) {}
+      try { setHash(); } catch (_) {}
       buildConversationLeftList();
     }
 
@@ -3972,6 +4594,9 @@
     }
 
     function buildConversationRow(session, isActive, onSelect, opts = {}) {
+      if (isConversationPendingCreateSession(session)) {
+        return buildConversationPendingCreateRow(session, (opts && opts.projectId) || STATE.project || "");
+      }
       const sid = getSessionId(session);
       const showCountDots = !!(opts && opts.showCountDots);
       const projectId = String((opts && opts.projectId) || STATE.project || "").trim();
@@ -4205,6 +4830,7 @@
       const oldPath = String((result && result.old_path) || "").trim();
       const newPath = String((result && result.new_path) || oldPath).trim();
       const newFilename = String((result && result.new_filename) || "").trim();
+      let changedTaskId = normalizeTaskStableId((result && (result.task_id || result.taskId)) || "");
       const now = new Date().toISOString().slice(0, 19).replace("T", " ");
       const items = allItems();
       let changed = false;
@@ -4212,6 +4838,7 @@
         const p = String((it && it.path) || "").trim();
         if (!p) continue;
         if (p === oldPath || p === newPath) {
+          if (!changedTaskId) changedTaskId = taskStableIdOfItem(it);
           if (newPath) it.path = newPath;
           if (newStatus) it.status = String(newStatus);
           if (newFilename) it.title = newFilename.replace(/\.md$/i, "");
@@ -4219,9 +4846,17 @@
           changed = true;
         }
       }
-      // 若当前选中的是旧路径，自动切到新路径，避免详情丢失
-      if (STATE && String(STATE.selectedPath || "").trim() === oldPath && newPath) {
+      // 若当前选中的是同一条任务，自动切到新路径，避免详情丢失。
+      const selectedTaskId = normalizeTaskStableId(STATE && STATE.selectedTaskId || "");
+      if (STATE && changedTaskId && selectedTaskId === changedTaskId) {
+        STATE.selectedTaskId = changedTaskId;
+      }
+      if (STATE && newPath && (
+        String(STATE.selectedPath || "").trim() === oldPath
+        || (changedTaskId && selectedTaskId && changedTaskId === selectedTaskId)
+      )) {
         STATE.selectedPath = newPath;
+        syncSelectedTaskSelectionStorage();
       }
       return changed;
     }
@@ -4469,6 +5104,23 @@
       return !!it && !isTaskItem(it);
     }
 
+    function channelDocumentItems(projectId, channelName, opts = {}) {
+      if (!projectId || projectId === "overview" || !channelName) return [];
+      const respectQuery = opts.query !== false;
+      let list = itemsForProject(projectId)
+        .filter((x) => String(x.channel || "") === String(channelName))
+        .filter(isKnowledgeItem);
+      if (respectQuery) list = list.filter(matchesQuery);
+      list = list.slice();
+      list.sort((a, b) => {
+        const ta = String((a && a.updated_at) || "");
+        const tb = String((b && b.updated_at) || "");
+        if (ta !== tb) return tb.localeCompare(ta);
+        return String((a && a.title) || "").localeCompare(String((b && b.title) || ""), "zh-Hans-CN");
+      });
+      return list;
+    }
+
     function inferKnowledgeGroupLabel(it) {
       const p = String((it && it.path) || "");
       const t = String((it && it.type) || "").trim();
@@ -4485,19 +5137,7 @@
     }
 
     function channelKnowledgeItems(projectId, channelName) {
-      if (!projectId || projectId === "overview" || !channelName) return [];
-      const list = itemsForProject(projectId)
-        .filter((x) => String(x.channel || "") === String(channelName))
-        .filter(isKnowledgeItem)
-        .filter(matchesQuery)
-        .slice();
-      list.sort((a, b) => {
-        const ta = String((a && a.updated_at) || "");
-        const tb = String((b && b.updated_at) || "");
-        if (ta !== tb) return tb.localeCompare(ta);
-        return String((a && a.title) || "").localeCompare(String((b && b.title) || ""), "zh-Hans-CN");
-      });
-      return list;
+      return channelDocumentItems(projectId, channelName, { query: true });
     }
 
     function groupedChannelKnowledge(items) {
@@ -4794,6 +5434,7 @@
       const pid = String(projectId || STATE.project || "").trim();
       if (!pid || pid === "overview") return [];
       const normalizeList = (list) => (Array.isArray(list) ? list.filter((s) => !isDeletedSession(s)) : []);
+      const pending = conversationPendingCreateSessionsForProject(pid);
       const liveMeta = PCONV.sessionDirectoryMetaByProject && PCONV.sessionDirectoryMetaByProject[pid];
       const localDirectory = PCONV.sessionDirectoryByProject && PCONV.sessionDirectoryByProject[pid];
       if (
@@ -4801,12 +5442,12 @@
         && Array.isArray(PCONV.sessions)
         && PCONV.sessions.length
       ) {
-        return normalizeList(PCONV.sessions.slice());
+        return pending.concat(normalizeList(PCONV.sessions.slice()));
       }
       if (Array.isArray(localDirectory) && (localDirectory.length || (liveMeta && liveMeta.liveLoaded))) {
-        return normalizeList(localDirectory.slice());
+        return pending.concat(normalizeList(localDirectory.slice()));
       }
-      return normalizeList(configuredProjectConversations(pid));
+      return pending.concat(normalizeList(configuredProjectConversations(pid)));
     }
 
     function conversationSessionsForChannel(channelName, projectId = "") {
@@ -4825,10 +5466,6 @@
         out.push(s);
       }
       return sortedConversationSessions(out);
-    }
-
-    function countConversationByChannel(channelName, projectId = "") {
-      return conversationSessionsForChannel(channelName, projectId).length;
     }
 
     function joinRelPath(base, leaf) {
@@ -4896,8 +5533,8 @@
       const pathText = document.getElementById("channelPathText");
       const copyBtn = document.getElementById("channelPathCopyBtn");
       const revealBtn = document.getElementById("channelPathRevealBtn");
-      const manageBtn = document.getElementById("channelConversationManageBtn");
-      if (!infoLabel || !nameEl || !subEl || !statsEl || !pathRow || !pathText || !copyBtn || !revealBtn || !manageBtn) return;
+      const manageBtn = document.getElementById("channelInfoManageBtn");
+      if (!infoLabel || !nameEl || !subEl || !statsEl || !pathRow || !pathText || !copyBtn || !revealBtn) return;
 
       const project = projectById(STATE.project);
       const projectItems = itemsForProject(STATE.project);
@@ -4951,8 +5588,6 @@
       clearNodeChildren(statsEl);
       pathRow.style.display = "none";
       setPathActions("");
-      manageBtn.disabled = true;
-      manageBtn.onclick = null;
 
       if (STATE.panelMode === "arch") {
         const orgSnapshot = orgBoardSnapshot(STATE.project);
@@ -5029,14 +5664,8 @@
       const sess = sessionForChannel(STATE.project, channelName);
       const sid = String((sess && sess.session_id) || "").trim();
       const desc = getChannelDesc(project, channelName, sess);
-      const channelTotals = channelTaskRequirementTotals(STATE.project, channelName);
-      const channelPrimaryCounts = primaryTaskCountsFromTotals(channelTotals);
-      const reqCapability = channelRequirementCapability(STATE.project, channelName);
-      const taskCount = toNonNegativeInt(channelTotals.total, 0);
-      const requirementsCount = toNonNegativeInt(channelTotals.requirements_total, 0);
-      const runningCount = channelPrimaryCounts.in_progress;
-      const supervisedCount = toNonNegativeInt(channelTotals.supervised, 0);
       const channelRootPath = resolveChannelRootPath(project, channelName, channelItems);
+      const documentCount = channelDocumentItems(STATE.project, channelName, { query: false }).length;
 
       infoLabel.textContent = "";
       infoLabel.style.display = "none";
@@ -5050,22 +5679,18 @@
       subEl.style.display = "none";
       copyBtn.style.display = "none";
 
-      statsEl.appendChild(chip("进行中:" + runningCount, runningCount ? "warn" : "muted"));
-      statsEl.appendChild(chip("待办:" + channelPrimaryCounts.todo, channelPrimaryCounts.todo ? "muted" : "muted"));
-      if (channelPrimaryCounts.pending_acceptance) statsEl.appendChild(chip("待验收:" + channelPrimaryCounts.pending_acceptance, "warn"));
-      if (supervisedCount) statsEl.appendChild(chip("关注:" + supervisedCount, "bad"));
-      statsEl.appendChild(chip("任务:" + taskCount, taskCount ? "good" : "muted"));
-      statsEl.appendChild(chip("需求:" + requirementsCount, requirementsCount ? "good" : "muted"));
-      statsEl.appendChild(chip(requirementCapabilityText(reqCapability), requirementCapabilityTone(reqCapability)));
+      statsEl.appendChild(chip("资料:" + documentCount, documentCount ? "good" : "muted"));
       if (!sid) statsEl.appendChild(chip("未绑定", "warn"));
       if (!channelRootPath) statsEl.appendChild(chip("目录缺失", "warn"));
       if (!desc) statsEl.appendChild(chip("未配置说明", "warn"));
 
       setPathActions(channelRootPath);
-      manageBtn.disabled = false;
-      manageBtn.onclick = () => {
-        openChannelConversationManageModal(STATE.project, channelName);
-      };
+      if (manageBtn) {
+        manageBtn.disabled = false;
+        manageBtn.onclick = () => {
+          openChannelConversationManageModal(STATE.project, channelName);
+        };
+      }
     }
 
     function buildLeftList() {
@@ -5188,7 +5813,9 @@
           const ok = await setTaskScheduleState(STATE.project, dragPath, true, "drag");
           if (ok) {
             STATE.taskModule = "schedule";
-            STATE.selectedPath = dragPath;
+            STATE.selectedPath = normalizeScheduleTaskPath(dragPath);
+            STATE.selectedTaskId = resolveTaskIdByPath(dragPath);
+            syncSelectedTaskSelectionStorage();
             setHash();
             render();
           }
@@ -5240,6 +5867,8 @@
             STATE.project = p.id;
             ensureChannel();
             STATE.selectedPath = "";
+            STATE.selectedTaskId = "";
+            syncSelectedTaskSelectionStorage();
             setHash();
             render();
             closeDrawerOnMobile();
@@ -5254,36 +5883,26 @@
       const total = toNonNegativeInt(projectTotals.total, 0);
       const requirementsTotal = toNonNegativeInt(projectTotals.requirements_total, 0);
       asideMeta.innerHTML = "";
+      const allKnowledgeItems = itemsForProject(STATE.project).filter(isKnowledgeItem);
       asideMeta.appendChild(metaPill("通道 " + unionChannelNames(STATE.project).length, "muted"));
-      asideMeta.appendChild(metaPill("任务 " + total, total ? "good" : "muted"));
-      asideMeta.appendChild(metaPill("需求 " + requirementsTotal, requirementsTotal ? "good" : "muted"));
+      asideMeta.appendChild(metaPill("资料 " + allKnowledgeItems.length, allKnowledgeItems.length ? "good" : "muted"));
 
       const names = unionChannelNames(STATE.project);
       for (const name of names) {
-        // Stable channel directory layer: counts are based on full data, not content filters.
-        const totals = channelTaskRequirementTotals(STATE.project, name);
-        const reqCapability = channelRequirementCapability(STATE.project, name);
-        const active = toNonNegativeInt(totals.active, 0);
-        const reqCount = toNonNegativeInt(totals.requirements_total, 0);
-        const convCount = countConversationByChannel(name);
+        const docCount = channelDocumentItems(STATE.project, name, { query: false }).length;
         const btn = el("button", { class: "rowbtn" + (STATE.channel === name ? " active" : "") });
         btn.appendChild(el("div", { class: "name", text: name }));
         const chips = el("div", { class: "chips" });
-        const d = toNonNegativeInt(totals.supervised, 0);
-        const ing = toNonNegativeInt(totals.in_progress, 0);
-        chips.appendChild(chip("需求:" + reqCount, reqCount ? "good" : "muted"));
-        if (String((reqCapability && reqCapability.source) || "") === "legacy_detect") chips.appendChild(chip("历史兼容", "warn"));
-        if (d) chips.appendChild(chip("督办:" + d, "bad"));
-        if (ing) chips.appendChild(chip("进行中:" + ing, "warn"));
-        chips.appendChild(chip("活跃:" + active, active ? "warn" : "muted"));
-        chips.appendChild(chip("对话:" + convCount, convCount > 0 ? "good" : "muted"));
+        chips.appendChild(chip("资料:" + docCount, docCount ? "good" : "muted"));
         btn.appendChild(chips);
         // Keep left list compact: channel-level summary only; detailed session info is shown in conversation mode.
         btn.addEventListener("click", () => {
           STATE.channel = name;
           STATE.selectedPath = "";
+          STATE.selectedTaskId = "";
           STATE.selectedSessionId = "";  // 切换通道时清除对话选中状态
           STATE.selectedSessionExplicit = false;
+          syncSelectedTaskSelectionStorage();
           setHash();
           render();
           closeDrawerOnMobile();
@@ -5325,21 +5944,69 @@
       return scopeItems().some(x => String(x.path) === p);
     }
 
+    function normalizeTaskStableId(value) {
+      return String(value || "").trim();
+    }
+
+    function taskStableIdOfItem(item) {
+      return normalizeTaskStableId(firstNonEmptyText([
+        item && item.task_id,
+        item && item.taskId,
+      ]) || "");
+    }
+
+    function taskSelectionMatchesItem(item, selectedPath = "", selectedTaskId = "") {
+      const stableTaskId = taskStableIdOfItem(item);
+      if (selectedTaskId && stableTaskId && stableTaskId === selectedTaskId) return true;
+      const itemPath = normalizeScheduleTaskPath(item && item.path);
+      const pathKey = normalizeScheduleTaskPath(selectedPath);
+      return !!(pathKey && itemPath && itemPath === pathKey);
+    }
+
+    function syncSelectedTaskSelectionStorage() {
+      try {
+        if (STATE.selectedPath) localStorage.setItem("taskDashboard.selectedPath", STATE.selectedPath);
+        else localStorage.removeItem("taskDashboard.selectedPath");
+        if (STATE.selectedTaskId) localStorage.setItem("taskDashboard.selectedTaskId", STATE.selectedTaskId);
+        else localStorage.removeItem("taskDashboard.selectedTaskId");
+      } catch (_) {}
+    }
+
+    function resolveTaskIdByPath(pathValue) {
+      const normalizedPath = normalizeScheduleTaskPath(pathValue);
+      if (!normalizedPath) return "";
+      const items = allItems();
+      const hit = items.find((x) => normalizeScheduleTaskPath(x && x.path) === normalizedPath) || null;
+      return taskStableIdOfItem(hit);
+    }
+
     function selectedItem() {
-      if (!STATE.selectedPath) return null;
+      const selectedTaskId = normalizeTaskStableId(STATE.selectedTaskId || "");
       const p = String(STATE.selectedPath || "");
       const items = allItems();
-      const exact = items.find((x) => String((x && x.path) || "") === p) || null;
+      if (!items.length) return null;
+      if (selectedTaskId) {
+        const byId = items.find((x) => taskStableIdOfItem(x) === selectedTaskId) || null;
+        if (byId) return byId;
+      }
+      const exact = p ? (items.find((x) => String((x && x.path) || "") === p) || null) : null;
       if (exact) return exact;
       const normalized = normalizeScheduleTaskPath(p);
-      if (!normalized) return null;
-      return items.find((x) => normalizeScheduleTaskPath(x && x.path) === normalized) || null;
+      if (normalized) {
+        const byPath = items.find((x) => normalizeScheduleTaskPath(x && x.path) === normalized) || null;
+        if (byPath) return byPath;
+      }
+      return null;
     }
 
     function chooseDefaultItem() {
       if (STATE.project === "overview") {
         const all = sortListItems(filteredItemsForProject("overview"));
         return all[0] || null;
+      }
+      if (STATE.panelMode === "channel" && STATE.view === "work") {
+        const docs = sortListItems(channelDocumentItems(STATE.project, STATE.channel, { query: true }));
+        return docs[0] || null;
       }
       if (STATE.view === "comms") {
         const base = itemsForProject(STATE.project).filter(x => String(x.channel || "") === String(STATE.channel));
@@ -5352,18 +6019,34 @@
 
     function ensureSelection() {
       if (STATE.panelMode === "conv") return;
+      if (STATE.panelMode === "channel") {
+        STATE.selectedSessionId = "";
+        STATE.selectedSessionExplicit = false;
+      }
       if (STATE.panelMode === "org" || STATE.panelMode === "arch") {
         STATE.selectedPath = "";
+        STATE.selectedTaskId = "";
         return;
       }
       if (STATE.panelMode === "task") {
         const moduleMode = normalizeTaskModule(STATE.taskModule);
         if (moduleMode === "org") {
           STATE.selectedPath = "";
+          STATE.selectedTaskId = "";
           return;
         }
         const cur = selectedItem();
-        if (cur && isTaskItem(cur)) return;
+        if (cur && isTaskItem(cur)) {
+          const currentPath = normalizeScheduleTaskPath(cur.path);
+          const currentTaskId = taskStableIdOfItem(cur);
+          if (currentPath && currentPath !== normalizeScheduleTaskPath(STATE.selectedPath || "")) {
+            STATE.selectedPath = currentPath;
+          }
+          if (currentTaskId && currentTaskId !== normalizeTaskStableId(STATE.selectedTaskId || "")) {
+            STATE.selectedTaskId = currentTaskId;
+          }
+          return;
+        }
         if (moduleMode === "schedule") {
           const lane = String(STATE.taskLane || "全部");
           const queueRows = projectScheduleItems(STATE.project);
@@ -5378,34 +6061,56 @@
           });
           if (firstQueue && firstQueue.task_path) {
             STATE.selectedPath = normalizeScheduleTaskPath(firstQueue.task_path);
+            STATE.selectedTaskId = normalizeTaskStableId(firstQueue.task_id || firstQueue.taskId || "");
             return;
           }
         }
         const groups = buildTaskGroups(STATE.project);
         const filtered = STATE.taskLane === "全部" ? groups : groups.filter((g) => g.lane === STATE.taskLane);
         const first = filtered.length ? filtered[0] : null;
-        if (first && first.master) STATE.selectedPath = String(first.master.path || "");
+        if (first && first.master) {
+          STATE.selectedPath = String(first.master.path || "");
+          STATE.selectedTaskId = taskStableIdOfItem(first.master);
+        }
         return;
       }
       const cur = selectedItem();
-      if (cur && isItemVisible(cur)) return;
+      if (cur && isItemVisible(cur)) {
+        const currentPath = normalizeScheduleTaskPath(cur.path);
+        const currentTaskId = taskStableIdOfItem(cur);
+        if (currentPath && currentPath !== normalizeScheduleTaskPath(STATE.selectedPath || "")) {
+          STATE.selectedPath = currentPath;
+        }
+        if (currentTaskId && currentTaskId !== normalizeTaskStableId(STATE.selectedTaskId || "")) {
+          STATE.selectedTaskId = currentTaskId;
+        }
+        return;
+      }
       const d = chooseDefaultItem();
-      if (d) STATE.selectedPath = String(d.path);
+      if (d) {
+        STATE.selectedPath = String(d.path);
+        STATE.selectedTaskId = taskStableIdOfItem(d);
+      }
     }
 
     function setSelectedPath(p) {
+      return setSelectedTaskRef(p, "");
+    }
+
+    function setSelectedTaskRef(pathValue, taskIdValue = "") {
       if (STATE.panelMode === "conv" || STATE.panelMode === "org" || STATE.panelMode === "arch") return;
-      STATE.selectedPath = normalizeScheduleTaskPath(p);
+      STATE.selectedPath = normalizeScheduleTaskPath(pathValue);
+      STATE.selectedTaskId = normalizeTaskStableId(taskIdValue || resolveTaskIdByPath(STATE.selectedPath));
       // 选择任务时清除对话选中状态
       STATE.selectedSessionId = "";
       STATE.selectedSessionExplicit = false;
-      try { localStorage.setItem("taskDashboard.selectedPath", STATE.selectedPath); } catch (_) {}
+      syncSelectedTaskSelectionStorage();
       renderDetail(selectedItem());
       refreshCCB();
       updateSelectionUI();
       buildChannelConversationList();
       // 移动端切换到详情视图
-      if (isMobileViewport() && p) {
+      if (isMobileViewport() && pathValue) {
         showDetailView();
       }
     }
@@ -5906,7 +6611,7 @@
     function extractOrgLevelTag(text) {
       const s = String(text || "").trim();
       if (!s) return "";
-      const m = s.match(/(?:子级|辅助|sub)\s*[-_ ]*0*(\d{1,3})/i);
+      const m = s.match(/(?:子级|业务|辅助|sub)\s*[-_ ]*0*(\d{1,3})/i);
       if (!m) return "";
       return String(Number(m[1] || 0));
     }
@@ -6153,6 +6858,8 @@
         ? t.depends_on
         : (Array.isArray(t.dependsOn) ? t.dependsOn : []);
       return {
+        task_id: String(t.task_id || t.taskId || "").trim(),
+        parent_task_id: String(t.parent_task_id || t.parentTaskId || "").trim(),
         task_path: String(t.task_path || t.taskPath || "").trim(),
         group_key: String(t.group_key || t.groupKey || "").trim(),
         task_role: String(t.task_role || t.taskRole || "single").trim().toLowerCase() || "single",

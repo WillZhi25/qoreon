@@ -29,6 +29,24 @@ from .sessions import channel_session_map, parse_session_id_list, parse_session_
 from .status_report import build_status_report_page_data
 from .utils import iso_now_local, repo_root_from_here
 
+try:
+    from .agent_capability_report import build_agent_capability_report_page_data
+except ImportError:
+    build_agent_capability_report_page_data = None
+
+try:
+    from .message_risk_report import build_message_risk_report_page_data
+except ImportError:
+    build_message_risk_report_page_data = None
+
+try:
+    from .platform_architecture_board import build_platform_architecture_board_page_data
+except ImportError:
+    build_platform_architecture_board_page_data = None
+
+
+_LEGACY_PROJECT_REGISTRY_BASENAME = "-".join(("collab", "registry"))
+
 
 def _as_list(v: Any) -> list[Any]:
     if v is None:
@@ -63,36 +81,46 @@ def _write_json_file(path: Path, payload: Any) -> None:
     )
 
 
-def _replace_path_with_symlink(link_path: Path, target_path: Path) -> None:
-    link_path.parent.mkdir(parents=True, exist_ok=True)
-    if link_path.is_symlink() or link_path.exists():
-        if link_path.is_dir() and not link_path.is_symlink():
-            shutil.rmtree(link_path)
-        else:
-            link_path.unlink()
-    relative_target = os.path.relpath(target_path, start=link_path.parent)
-    link_path.symlink_to(relative_target, target_is_directory=target_path.is_dir())
-
-
-def _sync_public_share_links(root: Path, dist_root: Path) -> None:
-    worklog_root = (root / "docs" / "worklog").resolve()
-    share_worklog_link = dist_root / "share" / "worklog"
-    if not worklog_root.exists():
-        if share_worklog_link.is_symlink() or share_worklog_link.exists():
-            if share_worklog_link.is_dir() and not share_worklog_link.is_symlink():
-                shutil.rmtree(share_worklog_link)
-            else:
-                share_worklog_link.unlink()
-        return
-    _replace_path_with_symlink(share_worklog_link, worklog_root)
-
-
 def _resolve_optional_path(root: Path, raw: str) -> Path | None:
     value = _as_str(raw).strip()
     if not value:
         return None
     path = Path(value)
     return path.resolve() if path.is_absolute() else (root / value).resolve()
+
+
+def _default_dashboard_output_rel(filename: str, *, root: Path | None = None) -> str:
+    script_dir = Path(__file__).resolve().parent.parent
+    base_root = (root or repo_root_from_here(__file__)).resolve()
+    try:
+        repo_rel = script_dir.relative_to(base_root)
+    except Exception:
+        repo_rel = Path(script_dir.name)
+    return str(repo_rel / "dist" / filename)
+
+
+def _project_registry_rel_candidates(project_cfg: dict[str, Any] | None = None) -> list[Path]:
+    cfg = project_cfg if isinstance(project_cfg, dict) else {}
+    candidates: list[Path] = []
+    seen: set[str] = set()
+
+    def _add(raw: Any) -> None:
+        text = str(raw or "").strip()
+        if not text:
+            return
+        candidate = Path(text)
+        key = candidate.as_posix()
+        if key in seen:
+            return
+        seen.add(key)
+        candidates.append(candidate)
+
+    for key in ("registry_rel", "registry_json_rel"):
+        _add(cfg.get(key))
+    _add(os.environ.get("TASK_DASHBOARD_PROJECT_REGISTRY_REL"))
+    _add(Path("registry") / "project-registry.json")
+    _add(Path("registry") / f"{_LEGACY_PROJECT_REGISTRY_BASENAME}.v1.json")
+    return candidates
 
 
 def _resolve_project_runs_root(root: Path, project_cfg: dict[str, Any]) -> Path | None:
@@ -130,6 +158,10 @@ def _resolve_project_runs_root(root: Path, project_cfg: dict[str, Any]) -> Path 
         if candidate.exists() and candidate.is_dir():
             return candidate
     return candidates[0] if candidates else None
+
+
+def _has_web_template(script_dir: Path, filename: str) -> bool:
+    return (script_dir / "web" / filename).exists()
 
 
 def _normalize_preview_text(raw: Any, *, limit: int = 220) -> str:
@@ -347,8 +379,8 @@ def _project_session_store_dirs(root: Path, script_dir: Path, project_root_rel: 
     candidates: list[Path] = []
     if project_root_rel:
         candidates.append((root / project_root_rel).resolve())
-    candidates.append(script_dir)
     candidates.append(root)
+    candidates.append(script_dir)
     return _unique_existing_paths(candidates)
 
 
@@ -366,17 +398,25 @@ def _load_project_session_rows(
     return []
 
 
-def _load_project_registry(root: Path, project_root_rel: str) -> dict[str, Any]:
+def _load_project_registry(
+    root: Path,
+    project_root_rel: str,
+    *,
+    project_cfg: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     if not project_root_rel:
         return {}
-    registry_path = (root / project_root_rel / "registry" / "collab-registry.v1.json").resolve()
-    if not registry_path.exists():
-        return {}
-    try:
-        payload = json.loads(registry_path.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-    return payload if isinstance(payload, dict) else {}
+    project_root = (root / project_root_rel).resolve()
+    for registry_rel in _project_registry_rel_candidates(project_cfg):
+        registry_path = (project_root / registry_rel).resolve()
+        if not registry_path.exists():
+            continue
+        try:
+            payload = json.loads(registry_path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+        return payload if isinstance(payload, dict) else {}
+    return {}
 
 
 def _project_execution_context_from_config(
@@ -441,62 +481,81 @@ def _session_project_execution_context(
 
 
 def main(argv: list[str] | None = None) -> int:
+    root_default = repo_root_from_here(__file__)
     ap = argparse.ArgumentParser()
-    ap.add_argument("--root", type=str, default=str(repo_root_from_here(__file__)), help="repo root")
+    ap.add_argument("--root", type=str, default=str(root_default), help="repo root")
     ap.add_argument("--out", type=str, default="", help="(deprecated) task page output html path (relative to root)")
     ap.add_argument(
         "--out-task",
         type=str,
-        default="项目管理-小秘书/项目看板/task-dashboard/dist/project-task-dashboard.html",
+        default=_default_dashboard_output_rel("project-task-dashboard.html", root=root_default),
         help="task page output html path (relative to root)",
     )
     ap.add_argument(
         "--out-overview",
         type=str,
-        default="项目管理-小秘书/项目看板/task-dashboard/dist/project-overview-dashboard.html",
+        default=_default_dashboard_output_rel("project-overview-dashboard.html", root=root_default),
         help="overview page output html path (relative to root)",
     )
     ap.add_argument(
         "--out-communication",
         type=str,
-        default="项目管理-小秘书/项目看板/task-dashboard/dist/project-communication-audit.html",
+        default=_default_dashboard_output_rel("project-communication-audit.html", root=root_default),
         help="communication audit page output html path (relative to root)",
     )
     ap.add_argument(
         "--out-session-health",
         type=str,
-        default="项目管理-小秘书/项目看板/task-dashboard/dist/project-session-health-dashboard.html",
+        default=_default_dashboard_output_rel("project-session-health-dashboard.html", root=root_default),
         help="session health page output html path (relative to root)",
+    )
+    ap.add_argument(
+        "--out-message-risk-dashboard",
+        type=str,
+        default=_default_dashboard_output_rel("project-message-risk-dashboard.html", root=root_default),
+        help="message risk dashboard output html path (relative to root)",
+    )
+    ap.add_argument(
+        "--out-agent-capability-report",
+        type=str,
+        default=_default_dashboard_output_rel("project-agent-capability-dashboard.html", root=root_default),
+        help="agent capability report output html path (relative to root)",
     )
     ap.add_argument(
         "--out-status-report",
         type=str,
-        default="项目管理-小秘书/项目看板/task-dashboard/dist/project-status-report.html",
+        default=_default_dashboard_output_rel("project-status-report.html", root=root_default),
         help="status report page output html path (relative to root)",
     )
     ap.add_argument(
         "--out-open-source-sync",
         type=str,
-        default="项目管理-小秘书/项目看板/task-dashboard/dist/project-open-source-sync-board.html",
+        default=_default_dashboard_output_rel("project-open-source-sync-board.html", root=root_default),
         help="open-source sync board output html path (relative to root)",
     )
     ap.add_argument(
         "--out-agent-directory",
         type=str,
-        default="项目管理-小秘书/项目看板/task-dashboard/dist/project-agent-directory.html",
+        default=_default_dashboard_output_rel("project-agent-directory.html", root=root_default),
         help="agent directory page output html path (relative to root)",
     )
     ap.add_argument(
         "--out-agent-curtain",
         type=str,
-        default="项目管理-小秘书/项目看板/task-dashboard/dist/project-agent-curtain.html",
+        default=_default_dashboard_output_rel("project-agent-curtain.html", root=root_default),
         help="agent curtain page output html path (relative to root)",
     )
     ap.add_argument(
         "--out-agent-relationship-board",
         type=str,
-        default="项目管理-小秘书/项目看板/task-dashboard/dist/project-agent-relationship-board.html",
+        default=_default_dashboard_output_rel("project-agent-relationship-board.html", root=root_default),
         help="agent relationship board page output html path (relative to root)",
+    )
+    ap.add_argument(
+        "--out-platform-architecture-board",
+        type=str,
+        default=_default_dashboard_output_rel("project-platform-architecture-board.html", root=root_default),
+        help="platform architecture board page output html path (relative to root)",
     )
     ap.add_argument(
         "--with-local-config",
@@ -521,6 +580,9 @@ def main(argv: list[str] | None = None) -> int:
     open_source_sync_page_link = str(
         os.environ.get("TASK_DASHBOARD_OPEN_SOURCE_SYNC_PAGE_LINK") or "project-open-source-sync-board.html"
     ).strip() or "project-open-source-sync-board.html"
+    platform_architecture_board_page_link = str(
+        os.environ.get("TASK_DASHBOARD_PLATFORM_ARCHITECTURE_BOARD_PAGE_LINK") or "project-platform-architecture-board.html"
+    ).strip() or "project-platform-architecture-board.html"
     agent_directory_page_link = str(
         os.environ.get("TASK_DASHBOARD_AGENT_DIRECTORY_PAGE_LINK") or "project-agent-directory.html"
     ).strip() or "project-agent-directory.html"
@@ -533,6 +595,15 @@ def main(argv: list[str] | None = None) -> int:
     session_health_page_link = str(
         os.environ.get("TASK_DASHBOARD_SESSION_HEALTH_PAGE_LINK") or "project-session-health-dashboard.html"
     ).strip() or "project-session-health-dashboard.html"
+    message_risk_page_link = str(
+        os.environ.get("TASK_DASHBOARD_MESSAGE_RISK_PAGE_LINK") or "project-message-risk-dashboard.html"
+    ).strip() or "project-message-risk-dashboard.html"
+    agent_capability_page_link = str(
+        os.environ.get("TASK_DASHBOARD_AGENT_CAPABILITY_PAGE_LINK") or "project-agent-capability-dashboard.html"
+    ).strip() or "project-agent-capability-dashboard.html"
+    performance_page_link = str(
+        os.environ.get("TASK_DASHBOARD_PERFORMANCE_PAGE_LINK") or "project-performance-diagnostics.html"
+    ).strip() or "project-performance-diagnostics.html"
 
     root = Path(args.root).resolve()
     out_task_rel = args.out.strip() or args.out_task
@@ -541,22 +612,47 @@ def main(argv: list[str] | None = None) -> int:
     out_communication_path = (root / args.out_communication).resolve()
     out_status_report_path = (root / args.out_status_report).resolve()
     out_open_source_sync_path = (root / args.out_open_source_sync).resolve()
+    out_platform_architecture_board_path = (root / args.out_platform_architecture_board).resolve()
     out_agent_directory_path = (root / args.out_agent_directory).resolve()
     out_agent_relationship_board_path = (root / args.out_agent_relationship_board).resolve()
     out_session_health_path = (root / args.out_session_health).resolve()
+    out_message_risk_dashboard_path = (root / args.out_message_risk_dashboard).resolve()
+    out_agent_capability_report_path = (root / args.out_agent_capability_report).resolve()
     out_agent_curtain_path = (root / args.out_agent_curtain).resolve()
     out_task_path.parent.mkdir(parents=True, exist_ok=True)
     out_overview_path.parent.mkdir(parents=True, exist_ok=True)
     out_communication_path.parent.mkdir(parents=True, exist_ok=True)
     out_status_report_path.parent.mkdir(parents=True, exist_ok=True)
     out_open_source_sync_path.parent.mkdir(parents=True, exist_ok=True)
+    out_platform_architecture_board_path.parent.mkdir(parents=True, exist_ok=True)
     out_agent_directory_path.parent.mkdir(parents=True, exist_ok=True)
     out_agent_relationship_board_path.parent.mkdir(parents=True, exist_ok=True)
     out_session_health_path.parent.mkdir(parents=True, exist_ok=True)
+    out_message_risk_dashboard_path.parent.mkdir(parents=True, exist_ok=True)
+    out_agent_capability_report_path.parent.mkdir(parents=True, exist_ok=True)
     out_agent_curtain_path.parent.mkdir(parents=True, exist_ok=True)
 
     script_dir = Path(__file__).resolve().parent.parent
     cfg = load_dashboard_config(script_dir, with_local=with_local)
+    message_risk_enabled = bool(build_message_risk_report_page_data) and _has_web_template(
+        script_dir,
+        "message_risk_dashboard.html.tpl",
+    )
+    agent_capability_enabled = bool(build_agent_capability_report_page_data) and _has_web_template(
+        script_dir,
+        "agent_capability_report.html.tpl",
+    )
+    platform_architecture_enabled = bool(build_platform_architecture_board_page_data) and _has_web_template(
+        script_dir,
+        "platform_architecture_board.html.tpl",
+    )
+    if not message_risk_enabled:
+        message_risk_page_link = ""
+    if not agent_capability_enabled:
+        agent_capability_page_link = ""
+        performance_page_link = ""
+    if not platform_architecture_enabled:
+        platform_architecture_board_page_link = ""
 
     projects_cfg = cfg.get("projects")
     if not isinstance(projects_cfg, list) or not projects_cfg:
@@ -820,7 +916,7 @@ def main(argv: list[str] | None = None) -> int:
             if label and url:
                 links.append({"label": label, "url": url})
 
-        registry_payload = _load_project_registry(root, project_root_rel)
+        registry_payload = _load_project_registry(root, project_root_rel, project_cfg=pc)
         agent_directory_summary = _build_agent_directory_summary(
             root,
             pc,
@@ -873,11 +969,21 @@ def main(argv: list[str] | None = None) -> int:
             "title": it.title,
             "code": it.code,
             "path": it.path,
+            "task_id": getattr(it, "task_id", ""),
+            "parent_task_id": getattr(it, "parent_task_id", ""),
+            "created_at": getattr(it, "created_at", ""),
             "updated_at": it.updated_at,
             "owner": it.owner,
             "due": it.due,
             "excerpt": it.excerpt,
             "tags": it.tags,
+            "main_owner": it.main_owner,
+            "collaborators": it.collaborators,
+            "validators": it.validators,
+            "challengers": it.challengers,
+            "backup_owners": it.backup_owners,
+            "management_slot": it.management_slot,
+            "custom_roles": it.custom_roles,
             "session": sess or None,
         }
         if _as_str(it.type).strip() == "任务":
@@ -906,6 +1012,9 @@ def main(argv: list[str] | None = None) -> int:
                 "type": it.get("type"),
                 "title": it.get("title"),
                 "path": it.get("path"),
+                "task_id": it.get("task_id"),
+                "parent_task_id": it.get("parent_task_id"),
+                "created_at": it.get("created_at"),
                 "updated_at": it.get("updated_at"),
             }
         )
@@ -965,10 +1074,12 @@ def main(argv: list[str] | None = None) -> int:
             "communication_page": communication_page_link,
             "status_report_page": status_report_page_link,
             "open_source_sync_page": open_source_sync_page_link,
+            "platform_architecture_board_page": platform_architecture_board_page_link,
             "agent_directory_page": agent_directory_page_link,
             "agent_curtain_page": agent_curtain_page_link,
             "agent_relationship_board_page": agent_relationship_board_page_link,
             "session_health_page": session_health_page_link,
+            "agent_capability_page": agent_capability_page_link,
         },
         "agent_directory_page": agent_directory_page_link,
         "agent_curtain_page": agent_curtain_page_link,
@@ -976,7 +1087,9 @@ def main(argv: list[str] | None = None) -> int:
         "communication_page": communication_page_link,
         "status_report_page": status_report_page_link,
         "open_source_sync_page": open_source_sync_page_link,
+        "platform_architecture_board_page": platform_architecture_board_page_link,
         "session_health_page": session_health_page_link,
+        "agent_capability_page": agent_capability_page_link,
         "overview": overview_data,
     }
     overview_page_data: dict[str, Any] = {
@@ -995,6 +1108,7 @@ def main(argv: list[str] | None = None) -> int:
             **task_data["links"],
             "communication_page": communication_page_link,
             "session_health_page": session_health_page_link,
+            "message_risk_page": message_risk_page_link,
         },
         "task_page": task_page_link,
         "agent_directory_page": agent_directory_page_link,
@@ -1009,6 +1123,7 @@ def main(argv: list[str] | None = None) -> int:
             "session_health_page": session_health_page_link,
             "agent_directory_page": agent_directory_page_link,
             "agent_curtain_page": agent_curtain_page_link,
+            "message_risk_page": message_risk_page_link,
         },
         "task_page": task_page_link,
         "agent_curtain_page": agent_curtain_page_link,
@@ -1026,6 +1141,7 @@ def main(argv: list[str] | None = None) -> int:
             "agent_directory_page": agent_directory_page_link,
             "agent_curtain_page": agent_curtain_page_link,
             "agent_relationship_board_page": agent_relationship_board_page_link,
+            "message_risk_page": message_risk_page_link,
         },
         "task_page": task_page_link,
         "agent_curtain_page": agent_curtain_page_link,
@@ -1036,8 +1152,12 @@ def main(argv: list[str] | None = None) -> int:
     communication_page_data: dict[str, Any] = {
         "generated_at": task_data["generated_at"],
         "dashboard": task_data["dashboard"],
-        "links": task_data["links"],
+        "links": {
+            **task_data["links"],
+            "message_risk_page": message_risk_page_link,
+        },
         "communication_page": communication_page_link,
+        "message_risk_page": message_risk_page_link,
         "status_report_page": status_report_page_link,
         "session_health_page": session_health_page_link,
         "environment": str(os.environ.get("TASK_DASHBOARD_ENV_NAME") or "stable").strip() or "stable",
@@ -1056,18 +1176,62 @@ def main(argv: list[str] | None = None) -> int:
     session_health_links = session_health_page_data.get("links")
     if isinstance(session_health_links, dict):
         session_health_links["status_report_page"] = status_report_page_link
+        session_health_links["message_risk_page"] = message_risk_page_link
     status_report_page_data = build_status_report_page_data(
         script_dir,
         generated_at=task_data["generated_at"],
         dashboard=task_data["dashboard"],
-        links=task_data["links"],
+        links={
+            **task_data["links"],
+            "message_risk_page": message_risk_page_link,
+        },
     )
+    message_risk_dashboard_page_data: dict[str, Any] | None = None
+    if message_risk_enabled:
+        message_risk_dashboard_page_data = build_message_risk_report_page_data(
+            script_dir,
+            generated_at=task_data["generated_at"],
+            dashboard=task_data["dashboard"],
+            links={
+                **task_data["links"],
+                "status_report_page": status_report_page_link,
+                "communication_page": communication_page_link,
+                "session_health_page": session_health_page_link,
+            },
+            message_risk_page_link=message_risk_page_link,
+        )
+    agent_capability_report_page_data: dict[str, Any] | None = None
+    if agent_capability_enabled:
+        agent_capability_report_page_data = build_agent_capability_report_page_data(
+            script_dir,
+            generated_at=task_data["generated_at"],
+            dashboard=task_data["dashboard"],
+            links={
+                **task_data["links"],
+                "status_report_page": status_report_page_link,
+                "session_health_page": session_health_page_link,
+                "message_risk_page": message_risk_page_link,
+            },
+            projects_meta=projects_meta,
+            session_health_page_data=session_health_page_data,
+            agent_capability_page_link=agent_capability_page_link,
+            performance_page_link=performance_page_link,
+        )
     open_source_sync_page_data = build_open_source_sync_page_data(
         script_dir,
         generated_at=task_data["generated_at"],
         dashboard=task_data["dashboard"],
         links=task_data["links"],
     )
+    platform_architecture_board_page_data: dict[str, Any] | None = None
+    if platform_architecture_enabled:
+        platform_architecture_board_page_data = build_platform_architecture_board_page_data(
+            script_dir,
+            generated_at=task_data["generated_at"],
+            dashboard=task_data["dashboard"],
+            links=task_data["links"],
+        )
+
     task_html = render_from_template(script_dir, "template.html", task_data)
     out_task_path.write_text(task_html, encoding="utf-8")
     print(f"Wrote: {out_task_path}")
@@ -1080,6 +1244,24 @@ def main(argv: list[str] | None = None) -> int:
     out_communication_path.write_text(communication_html, encoding="utf-8")
     print(f"Wrote: {out_communication_path}")
 
+    if message_risk_dashboard_page_data is not None:
+        message_risk_dashboard_html = render_from_template(
+            script_dir,
+            "template_message_risk_dashboard.html",
+            message_risk_dashboard_page_data,
+        )
+        out_message_risk_dashboard_path.write_text(message_risk_dashboard_html, encoding="utf-8")
+        print(f"Wrote: {out_message_risk_dashboard_path}")
+
+    if agent_capability_report_page_data is not None:
+        agent_capability_report_html = render_from_template(
+            script_dir,
+            "template_agent_capability_report.html",
+            agent_capability_report_page_data,
+        )
+        out_agent_capability_report_path.write_text(agent_capability_report_html, encoding="utf-8")
+        print(f"Wrote: {out_agent_capability_report_path}")
+
     status_report_html = render_from_template(script_dir, "template_status_report.html", status_report_page_data)
     out_status_report_path.write_text(status_report_html, encoding="utf-8")
     print(f"Wrote: {out_status_report_path}")
@@ -1091,6 +1273,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     out_open_source_sync_path.write_text(open_source_sync_html, encoding="utf-8")
     print(f"Wrote: {out_open_source_sync_path}")
+
+    if platform_architecture_board_page_data is not None:
+        platform_architecture_board_html = render_from_template(
+            script_dir,
+            "template_platform_architecture_board.html",
+            platform_architecture_board_page_data,
+        )
+        out_platform_architecture_board_path.write_text(platform_architecture_board_html, encoding="utf-8")
+        print(f"Wrote: {out_platform_architecture_board_path}")
 
     agent_directory_html = render_from_template(script_dir, "template_agent_directory.html", agent_directory_page_data)
     out_agent_directory_path.write_text(agent_directory_html, encoding="utf-8")
@@ -1111,5 +1302,4 @@ def main(argv: list[str] | None = None) -> int:
     session_health_html = render_from_template(script_dir, "template_session_health.html", session_health_page_data)
     out_session_health_path.write_text(session_health_html, encoding="utf-8")
     print(f"Wrote: {out_session_health_path}")
-    _sync_public_share_links(root, out_task_path.parent)
     return 0

@@ -125,7 +125,10 @@
       channelName: "",
       mode: "create",
       legacyBindingEntry: false,
+      retryPendingBlockId: "",
       initMessageDirty: false,
+      advancedOpen: false,
+      advancedBound: false,
       contextPrefill: null,
     };
 
@@ -172,21 +175,56 @@
     }
 
     function buildNewConvInitMessage(channelName) {
+      if (typeof buildUnifiedAgentInitMessage === "function") {
+        return buildUnifiedAgentInitMessage(channelName);
+      }
       const channelLabel = String(channelName || "").trim() || "当前通道";
       return [
-        "[Qoreon] " + channelLabel,
-        "你将负责该通道的协作推进，请先按当前培训标准完成初始化：",
-        "1) 项目配置 = 真源默认上下文；环境 / worktree / workdir / branch 以项目继承结果为准。",
-        "2) Agent = 身份，session = 继承结果；不要把会话临时状态当成项目真源。",
-        "3) 先阅读 README、活动任务、活动反馈、产出物中的材料 / 沉淀，再开始执行。",
-        "4) 后续推进默认按 任务 / 反馈 / 产出物 驱动，一般情况下要回执给原发送 Agent。",
-        "5) 跨通道正式消息只能走 http://127.0.0.1:18765/api/codex/announce（announce_to_channel），不能把临时 taskboard、内部 spawn 或非正式 resume 当成已通知通道。",
-        "6) 正式协作消息最小字段：当前发信Agent、session_id、source_ref、callback_to、interaction_mode。",
-        "7) 正式发送成功证据至少核对：announce_run_id、target_session_id、目标通道聊天区可见；缺一项都只能写待验证。",
-        "8) 最小回执结构：当前结论 / 是否通过或放行 / 唯一阻塞 / 关键路径或 run_id / 下一步动作。",
-        "完成后请先回复：已完成继承与初始化 + 当前职责边界 + 下一步动作。",
+        "[Agent培训] " + channelLabel,
+        "在开始当前协作前，你必须先完成以下初始化训练。未完成前，不要回复“已完成初始化”，也不要直接开始正式任务。",
         "",
-        "如需发送标准首发可见消息，请将本框内容改为：--bootstrap-message",
+        "1. 明确职责边界",
+        "- 只围绕当前通道和当前任务主线执行，不自行扩题。",
+        "- 默认处理后回原发送 Agent；若消息中有 callback_to.session_id，优先回该 session。",
+        "",
+        "2. 对齐项目真源",
+        "- 项目配置 = 真源默认上下文。",
+        "- Agent = 身份，session = 当前承载结果。",
+        "- 不清楚工作区、分支、真源时，先查项目内真源，不自行猜测。",
+        "",
+        "3. 阅读必读入口并学习项目技能",
+        "- README.md",
+        "- 活动任务/",
+        "- 活动反馈/",
+        "- 产出物/材料/",
+        "- 产出物/沉淀/",
+        "- 当前项目 skills 真源/索引文件",
+        "- 至少重点学习：agent-init-training-playbook、collab-message-send（或当前项目等效的正式消息技能）、当前通道自己的专项 skill。",
+        "",
+        "4. 学会怎么发正式消息",
+        "- 跨 Agent / 跨通道协作只能走系统正式 announce 接口（announce_to_channel），不能把内部草稿、内部 spawn、非正式 resume 当成“已通知通道”。",
+        "- 正式消息默认用你当前执行 Agent 自己的身份发送，不借用项目主会话、总控或其他通道 Agent 身份。",
+        "- 没有 announce_run_id 时，不得写已发出 / 已送达 / 已通知通道。",
+        "- 正式通知成功至少分三层判断：已生成待发送正文 / 已提交发送，待验证 / 已完成证据闭环。",
+        "",
+        "5. 学会什么时候必须回执",
+        "- 收到任务先首回执，执行后再回结构化结论。",
+        "- 只有 notify_only 才可不回。",
+        "- 后续默认按 任务 / 反馈 / 产出物 推进；普通任务优先任务文件收口块，反馈文件仅用于增强验收包。",
+        "",
+        "6. 完成一次消息能力验证",
+        "- 去项目通讯录/CCR 中找到一个“不是你自己”的 Agent，发送 1 条最小初始化验证消息。",
+        "- 如果当前项目没有可用通讯录或找不到目标，再回唯一阻塞，不得跳过这一步。",
+        "",
+        "7. 学习完成后的固定回执格式",
+        "已完成初始化",
+        "当前职责边界: <一句话>",
+        "当前主线: <一句话>",
+        "已学习技能: <列出本轮已学习的关键 skills>",
+        "通讯录验证: 已向 <agent名称> 发送正式消息",
+        "验证证据: <run_id / 目标session_id>",
+        "唯一阻塞: <无/一句话>",
+        "首个动作: <一句话>",
       ].join("\n");
     }
 
@@ -196,6 +234,72 @@
       if (!force && NEW_CONV_UI.initMessageDirty) return;
       input.value = buildNewConvInitMessage(NEW_CONV_UI.channelName);
       NEW_CONV_UI.initMessageDirty = false;
+    }
+
+    function selectedOptionText(selectEl, fallback = "") {
+      if (!selectEl) return String(fallback || "");
+      const idx = Number(selectEl.selectedIndex);
+      const option = idx >= 0 ? selectEl.options[idx] : null;
+      return String((option && option.text) || selectEl.value || fallback || "");
+    }
+
+    function buildNewConvAdvancedSummary() {
+      const strategyText = selectedOptionText(
+        document.getElementById("newConvReuseStrategy"),
+        "总是新建"
+      );
+      const environmentText = selectedOptionText(
+        document.getElementById("newConvEnvironment"),
+        "stable"
+      );
+      return "默认：" + [strategyText, environmentText].filter(Boolean).join(" / ");
+    }
+
+    function syncNewConvAdvancedSummary() {
+      const summaryEl = document.getElementById("newConvAdvancedSummary");
+      if (!summaryEl) return;
+      summaryEl.textContent = buildNewConvAdvancedSummary();
+    }
+
+    function setNewConvAdvancedOpen(open) {
+      const next = !!open;
+      NEW_CONV_UI.advancedOpen = next;
+      const section = document.getElementById("newConvAdvancedSection");
+      const toggle = document.getElementById("newConvAdvancedToggle");
+      const body = document.getElementById("newConvAdvancedBody");
+      if (section) section.classList.toggle("open", next);
+      if (toggle) toggle.setAttribute("aria-expanded", next ? "true" : "false");
+      if (body) body.hidden = !next;
+      syncNewConvAdvancedSummary();
+    }
+
+    function bindNewConvAdvancedControls() {
+      if (NEW_CONV_UI.advancedBound) return;
+      NEW_CONV_UI.advancedBound = true;
+
+      const toggle = document.getElementById("newConvAdvancedToggle");
+      if (toggle) {
+        toggle.addEventListener("click", () => {
+          setNewConvAdvancedOpen(!NEW_CONV_UI.advancedOpen);
+        });
+      }
+
+      [
+        ["newConvSessionRole", "change"],
+        ["newConvReuseStrategy", "change"],
+        ["newConvEnvironment", "change"],
+        ["newConvModel", "input"],
+        ["newConvPurpose", "input"],
+        ["newConvWorktreeRoot", "input"],
+        ["newConvWorkdir", "input"],
+        ["newConvBranch", "input"],
+      ].forEach(([id, eventName]) => {
+        const node = document.getElementById(id);
+        if (!node) return;
+        node.addEventListener(eventName, () => {
+          syncNewConvAdvancedSummary();
+        });
+      });
     }
 
     function setNewConvMode(mode) {
@@ -234,6 +338,7 @@
       }
       if (next === "attach" && sidInput) sidInput.value = "";
       if (next === "create") syncNewConvInitMessage(false);
+      syncNewConvAdvancedSummary();
     }
 
     function applyNewConvBindingPreset() {
@@ -269,6 +374,15 @@
       const currentSession = sessionForChannel(projectId, channelName)
         || findConversationSessionById(STATE.selectedSessionId)
         || null;
+      const channelSessions = (typeof conversationSessionsForChannel === "function")
+        ? conversationSessionsForChannel(channelName, projectId)
+        : [];
+      const hasPrimarySession = Array.isArray(channelSessions)
+        && channelSessions.some((session) => {
+          if (typeof isPrimarySession === "function") return isPrimarySession(session);
+          const row = (session && typeof session === "object") ? session : {};
+          return boolLike(row.is_primary) || boolLike(row.isPrimary);
+        });
       const normalized = normalizeConversationSessionDetail(currentSession || {}, currentSession || null);
       const projectContext = (DATA && DATA.projectContext && typeof DATA.projectContext === "object")
         ? DATA.projectContext
@@ -279,13 +393,12 @@
       const worktreeRoot = String(normalized.worktree_root || projectContext.worktreeRoot || "").trim();
       const workdir = String(normalized.workdir || worktreeRoot || "").trim();
       const branch = String(normalized.branch || projectContext.branch || "").trim();
-      const existingSession = !!sessionForChannel(projectId, channelName);
       return {
         environment,
         worktree_root: worktreeRoot,
         workdir,
         branch,
-        session_role: existingSession ? "child" : "primary",
+        session_role: hasPrimarySession ? "child" : "primary",
         reuse_strategy: "create_new",
         purpose: channelName ? ("新增" + String(channelName) + "对话") : "新增通道对话",
       };
@@ -318,9 +431,42 @@
       if (worktreeInput) worktreeInput.value = String(prefill.worktree_root || "");
       if (workdirInput) workdirInput.value = String(prefill.workdir || "");
       if (branchInput) branchInput.value = String(prefill.branch || "");
-      if (roleSelect) roleSelect.value = String(prefill.session_role || "child");
+      if (roleSelect) roleSelect.value = String(prefill.session_role || "primary");
       if (reuseSelect) reuseSelect.value = String(prefill.reuse_strategy || "create_new");
       if (purposeInput) purposeInput.value = String(prefill.purpose || "");
+      syncNewConvAdvancedSummary();
+    }
+
+    function applyNewConvDraftToFields(draft) {
+      const source = (draft && typeof draft === "object") ? draft : {};
+      const cliSelect = document.getElementById("newConvCliType");
+      const modelInput = document.getElementById("newConvModel");
+      const aliasInput = document.getElementById("newConvAlias");
+      const purposeInput = document.getElementById("newConvPurpose");
+      const roleSelect = document.getElementById("newConvSessionRole");
+      const reuseSelect = document.getElementById("newConvReuseStrategy");
+      const envSelect = document.getElementById("newConvEnvironment");
+      const worktreeInput = document.getElementById("newConvWorktreeRoot");
+      const workdirInput = document.getElementById("newConvWorkdir");
+      const branchInput = document.getElementById("newConvBranch");
+      const initMessageInput = document.getElementById("newConvInitMessage");
+
+      if (cliSelect && source.cliType) cliSelect.value = String(source.cliType || "codex");
+      if (modelInput) modelInput.value = normalizeSessionModel(source.model);
+      if (aliasInput) aliasInput.value = String(source.alias || "");
+      if (purposeInput) purposeInput.value = String(source.purpose || "");
+      if (roleSelect && source.sessionRole) roleSelect.value = String(source.sessionRole || "child");
+      if (reuseSelect && source.reuseStrategy) reuseSelect.value = String(source.reuseStrategy || "create_new");
+      if (envSelect && source.environment) envSelect.value = normalizeSessionEnvironmentValue(source.environment);
+      if (worktreeInput) worktreeInput.value = String(source.worktreeRoot || "");
+      if (workdirInput) workdirInput.value = String(source.workdir || "");
+      if (branchInput) branchInput.value = String(source.branch || "");
+      if (initMessageInput) {
+        initMessageInput.value = String(source.initMessage || "");
+        NEW_CONV_UI.initMessageDirty = !!String(source.initMessage || "").trim();
+      }
+      syncNewConvModelUI();
+      syncNewConvAdvancedSummary();
     }
 
     function syncNewConvModelUI() {
@@ -334,11 +480,18 @@
     function openNewConvModal(preProjectId, preChannelName, preferredMode = "create", options = {}) {
       const pid = String(preProjectId || STATE.project || "");
       const ch = String(preChannelName || STATE.channel || "");
+      const presetDraft = (options && options.presetDraft && typeof options.presetDraft === "object")
+        ? options.presetDraft
+        : null;
+      const forceAdvancedOpen = !!(options && options.forceAdvancedOpen);
+      bindNewConvAdvancedControls();
       NEW_CONV_UI.open = true;
       NEW_CONV_UI.projectId = pid;
       NEW_CONV_UI.channelName = ch;
       NEW_CONV_UI.mode = normalizeNewConvMode(preferredMode);
       NEW_CONV_UI.legacyBindingEntry = !!(options && options.legacyBindingEntry);
+      NEW_CONV_UI.retryPendingBlockId = String((options && options.retryPendingBlockId) || "").trim();
+      NEW_CONV_UI.advancedOpen = false;
 
       newConvModalError("");
 
@@ -368,9 +521,14 @@
       if (cliSelect) cliSelect.value = "codex";
       applyNewConvBindingPreset();
       syncNewConvContextFields();
-      NEW_CONV_UI.initMessageDirty = false;
-      syncNewConvInitMessage(true);
+      if (presetDraft) {
+        applyNewConvDraftToFields(presetDraft);
+      } else {
+        NEW_CONV_UI.initMessageDirty = false;
+        syncNewConvInitMessage(true);
+      }
       setNewConvMode(NEW_CONV_UI.mode);
+      setNewConvAdvancedOpen(forceAdvancedOpen);
 
       const mask = document.getElementById("newConvMask");
       if (mask) mask.classList.add("show");
@@ -406,6 +564,7 @@
     function closeNewConvModal() {
       NEW_CONV_UI.open = false;
       NEW_CONV_UI.legacyBindingEntry = false;
+      NEW_CONV_UI.retryPendingBlockId = "";
       const mask = document.getElementById("newConvMask");
       if (mask) mask.classList.remove("show");
       const errEl = document.getElementById("newConvErr");
@@ -470,6 +629,13 @@
             || src.projectExecutionContext
             || fb.project_execution_context
             || fb.projectExecutionContext
+            || null
+        ),
+        task_tracking: normalizeTaskTrackingClient(
+          src.task_tracking
+            || src.taskTracking
+            || fb.task_tracking
+            || fb.taskTracking
             || null
         ),
       };
@@ -636,10 +802,88 @@
       }
     }
 
+    function heartbeatDraftMaxExecuteInputValue(draft) {
+      const value = Math.max(0, Number((draft && draft.maxExecuteCount) || 0));
+      return value > 0 ? String(value) : "";
+    }
+
+    function buildConversationHeartbeatLimitFact(label, value, extraClass = "") {
+      const item = el("div", { class: "conv-heartbeat-limit-fact" + (extraClass ? (" " + extraClass) : "") });
+      item.appendChild(el("span", { class: "k", text: label }));
+      item.appendChild(el("span", { class: "v", text: value }));
+      return item;
+    }
+
+    function buildConversationHeartbeatLimitStatusCard(task, draft = null) {
+      const liveTask = (task && typeof task === "object") ? task : null;
+      const liveMeta = heartbeatTaskExecuteLimitMeta(liveTask || {});
+      const draftObj = (draft && typeof draft === "object") ? draft : {};
+      const draftLimit = Math.max(0, Number(draftObj.maxExecuteCount || 0));
+      const liveMax = liveMeta.maxExecuteCount;
+      const displayMax = liveMeta.hasMeta && liveMax != null
+        ? (liveMax > 0 ? (liveMax + " 次") : "不限")
+        : (draftLimit > 0 ? (draftLimit + " 次（草稿）") : "不限（草稿）");
+      const displayExecuted = liveMeta.executedCount != null ? (liveMeta.executedCount + " 次") : "待回传";
+      const displayRemaining = liveMeta.hasMeta
+        ? (liveMax === 0 ? "不限" : (liveMeta.remainingExecuteCount != null ? (liveMeta.remainingExecuteCount + " 次") : "待回传"))
+        : "待回传";
+      const summaryText = liveMeta.hasMeta
+        ? (heartbeatTaskExecuteLimitInlineText(liveTask) || "执行次数状态待回传")
+        : "live 真源尚未回传执行次数字段；当前先按冻结样例接入 optional 展示。";
+      const card = el("section", { class: "conv-heartbeat-limit-card" + (liveMeta.reached ? " is-reached" : "") });
+      const head = el("div", { class: "conv-heartbeat-limit-head" });
+      head.appendChild(el("div", { class: "conv-heartbeat-limit-title", text: "执行次数状态" }));
+      if (liveMeta.reached) head.appendChild(chip("已达上限自动关闭", "warn"));
+      card.appendChild(head);
+
+      const facts = el("div", { class: "conv-heartbeat-limit-facts" });
+      facts.appendChild(buildConversationHeartbeatLimitFact("最大执行次数", displayMax));
+      facts.appendChild(buildConversationHeartbeatLimitFact("已执行次数", displayExecuted));
+      facts.appendChild(buildConversationHeartbeatLimitFact("剩余次数", displayRemaining));
+      card.appendChild(facts);
+
+      card.appendChild(el("div", { class: "conv-heartbeat-limit-summary", text: summaryText }));
+      if (liveMeta.autoDisabledAt) {
+        card.appendChild(el("div", {
+          class: "conv-heartbeat-limit-meta",
+          text: "自动关闭时间："
+            + (compactDateTime(liveMeta.autoDisabledAt) || shortDateTime(liveMeta.autoDisabledAt) || liveMeta.autoDisabledAt),
+        }));
+      }
+      if (!liveMeta.hasMeta || (draftLimit !== (liveMax == null ? 0 : liveMax))) {
+        card.appendChild(el("div", {
+          class: "conv-heartbeat-limit-draft",
+          text: "当前草稿上限："
+            + (draftLimit > 0 ? (draftLimit + " 次") : "不限")
+            + "；`run-now` 不计入执行次数。",
+        }));
+      } else {
+        card.appendChild(el("div", {
+          class: "conv-heartbeat-limit-draft",
+          text: "`run-now` 不计入执行次数；retry / 恢复不重复计数。",
+        }));
+      }
+      return card;
+    }
+
+    // 会话级心跳写回真源时，若 source_scope 缺失但 task 仍绑定当前 session，
+    // 也要按 session 任务保留，避免被误判成 project 后在保存时被过滤掉。
+    function inferConversationHeartbeatTaskSourceScope(task, sessionId = "") {
+      const row = (task && typeof task === "object") ? task : {};
+      const explicitScope = String(firstNonEmptyText([row.source_scope, row.sourceScope])).trim().toLowerCase();
+      if (explicitScope === "project") return "project";
+      if (explicitScope === "session") return "session";
+      const taskSessionId = String(firstNonEmptyText([row.session_id, row.sessionId])).trim();
+      const currentSessionId = String(sessionId || "").trim();
+      if (taskSessionId && (!currentSessionId || taskSessionId === currentSessionId)) return "session";
+      return "project";
+    }
+
     function buildSessionHeartbeatPayloadFromDrafts() {
-      const meta = SESSION_INFO_UI.heartbeatMeta || normalizeSessionHeartbeatMeta({}, []);
+      const sid = String(SESSION_INFO_UI.sessionId || "").trim();
+      const channelName = String(SESSION_INFO_UI.base && SESSION_INFO_UI.base.channel_name || "").trim();
       const tasks = (Array.isArray(SESSION_INFO_UI.heartbeatTasks) ? SESSION_INFO_UI.heartbeatTasks : [])
-        .filter((task) => String(task && task.source_scope || "session").trim() !== "project");
+        .filter((task) => inferConversationHeartbeatTaskSourceScope(task, sid) !== "project");
       const enabledCount = tasks.filter((row) => _coerceBoolClient(row && row.enabled, false)).length;
       return {
         heartbeat: {
@@ -651,6 +895,8 @@
               heartbeat_task_id: String(row.heartbeat_task_id || "").trim(),
               title: String(row.title || row.heartbeat_task_id || "").trim(),
               enabled: _coerceBoolClient(row.enabled, true),
+              channel_name: String(row.channel_name || row.channelName || channelName).trim(),
+              session_id: String(row.session_id || row.sessionId || sid).trim(),
               preset_key: String(row.preset_key || "ops_inspection").trim() || "ops_inspection",
               prompt_template: String(row.prompt_template || "").trim(),
               schedule_type: String(row.schedule_type || "interval").trim() === "daily" ? "daily" : "interval",
@@ -658,6 +904,7 @@
               daily_time: String(row.daily_time || "09:30").trim() || "09:30",
               weekdays: normalizeHeartbeatWeekdaysClient(row.weekdays),
               busy_policy: String(row.busy_policy || "run_on_next_idle").trim() || "run_on_next_idle",
+              max_execute_count: Math.max(0, Number(row.max_execute_count || row.maxExecuteCount || 0)),
               context_scope: {
                 recent_tasks_limit: Math.max(0, Number(contextScope.recent_tasks_limit || 10)),
                 recent_runs_limit: Math.max(0, Number(contextScope.recent_runs_limit || 10)),
@@ -676,14 +923,21 @@
       const sid = String(SESSION_INFO_UI.sessionId || "").trim();
       const draft = SESSION_INFO_UI.heartbeatDraft || null;
       let tasks = (Array.isArray(SESSION_INFO_UI.heartbeatTasks) ? SESSION_INFO_UI.heartbeatTasks.slice() : [])
-        .filter((task) => String(task && task.source_scope || "session").trim() !== "project");
+        .filter((task) => inferConversationHeartbeatTaskSourceScope(task, sid) !== "project");
+      const existingTaskIds = new Set(
+        tasks
+          .map((task) => String(task && task.heartbeat_task_id || "").trim())
+          .filter(Boolean)
+      );
       if (draft) {
         const heartbeatTaskId = String(draft.heartbeatTaskId || "").trim().replace(/[^a-zA-Z0-9._-]+/g, "-");
-        if (heartbeatTaskId) {
+        // 普通会话保存只允许覆写已存在的 session 任务，不能把默认草稿新建进真源。
+        if (heartbeatTaskId && existingTaskIds.has(heartbeatTaskId)) {
           const normalized = normalizeHeartbeatTaskClient({
             heartbeat_task_id: heartbeatTaskId,
             title: String(draft.title || "").trim() || heartbeatTaskId,
             enabled: _coerceBoolClient(draft.enabled, true),
+            source_scope: "session",
             preset_key: String(draft.presetKey || "ops_inspection").trim(),
             prompt_template: String(draft.promptTemplate || "").trim(),
             schedule_type: String(draft.scheduleType || "interval").trim(),
@@ -691,6 +945,7 @@
             daily_time: String(draft.dailyTime || "09:30").trim() || "09:30",
             weekdays: normalizeHeartbeatWeekdaysClient(draft.weekdays),
             busy_policy: String(draft.busyPolicy || "run_on_next_idle").trim(),
+            max_execute_count: Math.max(0, Number(draft.maxExecuteCount || 0)),
             context_scope: {
               recent_tasks_limit: Math.max(0, Number(draft.contextScope && draft.contextScope.recentTasksLimit || 10)),
               recent_runs_limit: Math.max(0, Number(draft.contextScope && draft.contextScope.recentRunsLimit || 10)),
@@ -705,7 +960,7 @@
           tasks.unshift(normalized);
         }
       }
-      const meta = SESSION_INFO_UI.heartbeatMeta || normalizeSessionHeartbeatMeta({}, tasks);
+      const channelName = String(SESSION_INFO_UI.base && SESSION_INFO_UI.base.channel_name || "").trim();
       const enabledCount = tasks.filter((row) => _coerceBoolClient(row && row.enabled, false)).length;
       return {
         heartbeat: {
@@ -717,6 +972,8 @@
               heartbeat_task_id: String(row.heartbeat_task_id || "").trim(),
               title: String(row.title || row.heartbeat_task_id || "").trim(),
               enabled: _coerceBoolClient(row.enabled, true),
+              channel_name: String(row.channel_name || row.channelName || channelName).trim(),
+              session_id: String(row.session_id || row.sessionId || sid).trim(),
               preset_key: String(row.preset_key || "ops_inspection").trim() || "ops_inspection",
               prompt_template: String(row.prompt_template || "").trim(),
               schedule_type: String(row.schedule_type || "interval").trim() === "daily" ? "daily" : "interval",
@@ -724,6 +981,7 @@
               daily_time: String(row.daily_time || "09:30").trim() || "09:30",
               weekdays: normalizeHeartbeatWeekdaysClient(row.weekdays),
               busy_policy: String(row.busy_policy || "run_on_next_idle").trim() || "run_on_next_idle",
+              max_execute_count: Math.max(0, Number(row.max_execute_count || row.maxExecuteCount || 0)),
               context_scope: {
                 recent_tasks_limit: Math.max(0, Number(contextScope.recent_tasks_limit || 10)),
                 recent_runs_limit: Math.max(0, Number(contextScope.recent_runs_limit || 10)),
@@ -749,6 +1007,9 @@
         throw new Error(String(responseErrorDetailFromJson(payload, "读取会话心跳任务失败（HTTP " + resp.status + "）")));
       }
       SESSION_INFO_UI.base = normalizeSessionInfoResponse(payload, SESSION_INFO_UI.base);
+      if (typeof mergeConversationSessionDetailIntoStore === "function") {
+        mergeConversationSessionDetailIntoStore(SESSION_INFO_UI.base, sid);
+      }
       applySessionHeartbeatPayload(payload, preferredTaskId);
       syncConversationHeartbeatSummaryToStore(sid, SESSION_INFO_UI.heartbeatSummary, SESSION_INFO_UI.heartbeatTasks);
       return true;
@@ -761,17 +1022,21 @@
       if (!draft) throw new Error("当前没有可保存的心跳任务草稿");
       const heartbeatTaskId = String(draft.heartbeatTaskId || "").trim().replace(/[^a-zA-Z0-9._-]+/g, "-");
       if (!heartbeatTaskId) throw new Error("heartbeat_task_id 不能为空");
+      const promptTemplate = String(draft.promptTemplate || "").trim();
+      if (!promptTemplate) throw new Error("自定义提示词不能为空");
       const normalized = normalizeHeartbeatTaskClient({
         heartbeat_task_id: heartbeatTaskId,
         title: String(draft.title || "").trim() || heartbeatTaskId,
         enabled: _coerceBoolClient(draft.enabled, true),
+        source_scope: "session",
         preset_key: String(draft.presetKey || "ops_inspection").trim(),
-        prompt_template: String(draft.promptTemplate || "").trim(),
+        prompt_template: promptTemplate,
         schedule_type: String(draft.scheduleType || "interval").trim(),
         interval_minutes: Math.max(5, Number(draft.intervalMinutes || 120)),
         daily_time: String(draft.dailyTime || "09:30").trim() || "09:30",
         weekdays: normalizeHeartbeatWeekdaysClient(draft.weekdays),
         busy_policy: String(draft.busyPolicy || "run_on_next_idle").trim(),
+        max_execute_count: Math.max(0, Number(draft.maxExecuteCount || 0)),
         context_scope: {
           recent_tasks_limit: Math.max(0, Number(draft.contextScope && draft.contextScope.recentTasksLimit || 10)),
           recent_runs_limit: Math.max(0, Number(draft.contextScope && draft.contextScope.recentRunsLimit || 10)),
@@ -954,6 +1219,8 @@
           heartbeatBusyPolicyLabel(task.busy_policy),
           task.next_due_at ? ("下次: " + compactDateTime(task.next_due_at)) : "下次: -",
         ];
+        const limitText = heartbeatTaskExecuteLimitInlineText(task);
+        if (limitText) descParts.push(limitText);
         meta.appendChild(el("div", {
           class: "project-auto-target-desc",
           text: descParts.join(" · "),
@@ -1142,6 +1409,7 @@
           }));
         }
       }
+      body.appendChild(buildConversationHeartbeatLimitStatusCard(currentTask, heartbeatDraft));
       if (editorMode === "history" && !selectedHeartbeatTaskId) {
         body.appendChild(el("div", { class: "project-auto-record-empty", text: "当前还没有可查看的执行记录。" }));
       }
@@ -1261,6 +1529,31 @@
         SESSION_INFO_UI.heartbeatDraft.busyPolicy = String(hbBusySel.value || "run_on_next_idle").trim();
       });
       body.appendChild(buildProjectAutoSelectField("忙碌策略", hbBusySel, "推荐优先使用“忙碌时顺延”。"));
+
+      const hbMaxExecuteInput = el("input", {
+        class: "project-auto-input",
+        type: "number",
+        min: "0",
+        step: "1",
+        value: heartbeatDraftMaxExecuteInputValue(heartbeatDraft),
+        placeholder: "留空或 0 表示不限",
+      });
+      hbMaxExecuteInput.disabled = loading || heartbeatSaving || currentTaskIsProjectAssigned;
+      const assignMaxExecuteCount = () => {
+        if (!SESSION_INFO_UI.heartbeatDraft) syncSessionHeartbeatDraft();
+        const raw = String(hbMaxExecuteInput.value || "").trim();
+        SESSION_INFO_UI.heartbeatDraft.maxExecuteCount = raw ? Math.max(0, Number(raw || 0)) : 0;
+      };
+      hbMaxExecuteInput.addEventListener("input", assignMaxExecuteCount);
+      hbMaxExecuteInput.addEventListener("change", () => {
+        assignMaxExecuteCount();
+        renderConversationSessionInfoModal();
+      });
+      body.appendChild(buildProjectAutoInputField(
+        "最大执行次数",
+        hbMaxExecuteInput,
+        "0 或留空 = 不限制；只统计自动调度终态次数，`run-now` 不计入。"
+      ));
 
       const hbPromptInput = el("textarea", {
         class: "project-auto-textarea",
@@ -1648,7 +1941,7 @@
         reasoning_effort: cliType === "codex" ? normalizeReasoningEffort(form.reasoning_effort) : "",
       };
       // 历史 status 兼容逻辑由后端统一迁移，前端编辑弹框不再直接改写该字段。
-      const heartbeatPayload = buildSessionHeartbeatPayloadFromDrafts();
+      const heartbeatPayload = buildSessionHeartbeatPayloadForSessionSave();
       if (heartbeatPayload && heartbeatPayload.heartbeat) {
         payload.heartbeat = heartbeatPayload.heartbeat;
       }
@@ -1716,6 +2009,9 @@
               Array.isArray(SESSION_INFO_UI.heartbeatTasks) ? SESSION_INFO_UI.heartbeatTasks : []
             ),
             project_execution_context: (updated && updated.project_execution_context) || (row && row.project_execution_context) || null,
+            task_tracking: hasConversationTaskTrackingData(updated && updated.task_tracking)
+              ? updated.task_tracking
+              : (row && row.task_tracking),
           }) || row;
           break;
         }

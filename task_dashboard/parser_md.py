@@ -5,6 +5,8 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .model import Item
+from .task_identity import extract_task_identity_from_markdown, strip_markdown_front_matter
+from .task_harness import parse_task_harness
 from .utils import file_mtime_iso, is_channel_dir_name, norm_relpath, safe_read_text
 
 
@@ -54,7 +56,8 @@ def is_channel_knowledge_path(relpath: str) -> bool:
 
 
 def extract_heading_title(md: str) -> str:
-    for line in md.splitlines():
+    body = strip_markdown_front_matter(md)
+    for line in body.splitlines():
         m = RE_HEADING.match(line)
         if m:
             return m.group(1).strip()
@@ -62,7 +65,8 @@ def extract_heading_title(md: str) -> str:
 
 
 def extract_field(md: str, field_name: str) -> str:
-    lines = md.splitlines()
+    body = strip_markdown_front_matter(md)
+    lines = body.splitlines()
     header = f"## {field_name}".strip()
     for i, line in enumerate(lines):
         if line.strip() == header:
@@ -74,15 +78,16 @@ def extract_field(md: str, field_name: str) -> str:
                     break
                 v = re.sub(r"^[\-\*\u2022]\s+", "", v)
                 return v[:200]
-    inline = re.search(rf"{re.escape(field_name)}\s*[:：]\s*(.+)", md)
+    inline = re.search(rf"{re.escape(field_name)}\s*[:：]\s*(.+)", body)
     if inline:
         return inline.group(1).strip()[:200]
     return ""
 
 
 def extract_excerpt(md: str, max_lines: int = 26, max_chars: int = 1600) -> str:
+    body = strip_markdown_front_matter(md)
     out: list[str] = []
-    for line in md.splitlines():
+    for line in body.splitlines():
         s = line.rstrip()
         if not s:
             continue
@@ -188,14 +193,23 @@ def iter_items(
         title_from_name = rest.strip()
 
         md = safe_read_text(p)
-        title_from_h1 = extract_heading_title(md)
+        identity = extract_task_identity_from_markdown(md)
+        body_md = strip_markdown_front_matter(md)
+        title_from_h1 = extract_heading_title(body_md)
         title = title_from_h1 or title_from_name
 
-        owner = extract_field(md, "负责人")
-        due = extract_field(md, "截止日期") or extract_field(md, "截止")
+        owner = extract_field(body_md, "负责人")
+        due = extract_field(body_md, "截止日期") or extract_field(body_md, "截止")
+        task_harness = parse_task_harness(
+            root=root,
+            task_root_rel=task_root_rel,
+            project_id=project_id,
+            item_type=typ,
+            markdown=body_md,
+        )
 
         ex_lines, ex_chars = excerpt_limits_for_type(typ)
-        excerpt = extract_excerpt(md, max_lines=ex_lines, max_chars=ex_chars)
+        excerpt = extract_excerpt(body_md, max_lines=ex_lines, max_chars=ex_chars)
 
         channel = "未归类"
         try:
@@ -216,11 +230,21 @@ def iter_items(
                 title=title,
                 code=code,
                 path=rel,
+                task_id=str(identity.get("task_id") or "").strip(),
+                parent_task_id=str(identity.get("parent_task_id") or "").strip(),
+                created_at=str(identity.get("created_at") or "").strip(),
                 updated_at=file_mtime_iso(p),
                 owner=owner,
                 due=due,
                 excerpt=excerpt,
                 tags=extra_tags,
+                main_owner=task_harness.get("main_owner"),
+                collaborators=task_harness.get("collaborators") or [],
+                validators=task_harness.get("validators") or [],
+                challengers=task_harness.get("challengers") or [],
+                backup_owners=task_harness.get("backup_owners") or [],
+                management_slot=task_harness.get("management_slot") or [],
+                custom_roles=task_harness.get("custom_roles") or [],
             )
         )
 

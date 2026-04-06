@@ -34,6 +34,10 @@
         comms.sort((a, b) => String(b.updated_at || "").localeCompare(String(a.updated_at || "")));
         return comms;
       }
+      if (STATE.panelMode === "channel") {
+        if (STATE.project === "overview" || !STATE.channel) return [];
+        return channelDocumentItems(STATE.project, STATE.channel, { query: true });
+      }
       if (STATE.project === "overview") return filteredItemsForProject("overview");
       if (!STATE.channel) return [];
       return filteredItemsForProject(STATE.project).filter((x) => String(x.channel || "") === String(STATE.channel));
@@ -49,9 +53,11 @@
       const bar = document.getElementById("filterBar");
       const list = document.getElementById("fileList");
       const materialsHeader = document.getElementById("taskMaterialsHeader");
+      const isChannelFileMode = STATE.panelMode === "channel" && STATE.view === "work";
 
       bar.innerHTML = "";
       list.innerHTML = "";
+      bar.style.display = "";
       if (materialsHeader) {
         materialsHeader.style.display = (STATE.panelMode === "channel") ? "" : "none";
       }
@@ -102,18 +108,23 @@
       const scopeLabel = (STATE.project === "overview")
         ? "总览（跨项目）"
         : ("项目:" + (proj ? proj.name : STATE.project) + " · 通道:" + (STATE.channel || "-"));
-      const viewLabel = (STATE.view === "comms") ? "沟通通道" : "工作任务";
+      const viewLabel = (STATE.view === "comms") ? "沟通通道" : (isChannelFileMode ? "通道文件" : "工作任务");
       if (mainMeta) {
         const loadingSuffix = itemsLoading ? " · loading=1" : "";
         mainMeta.textContent = "view=" + viewLabel + " · scope=" + scopeLabel + " · generated_at=" + DATA.generated_at + " · items=" + items.length + loadingSuffix;
       }
 
-      if (STATE.view === "work") {
+      if (isChannelFileMode) {
+        const sortRow = el("div", { class: "filterrow" });
+        sortRow.appendChild(buildItemSortControl());
+        bar.appendChild(sortRow);
+      } else if (STATE.view === "work") {
         const typeRow = el("div", { class: "filterrow" });
         for (const t of typeOptions()) {
           typeRow.appendChild(chipButton(t === "全部" ? "全部" : t, STATE.type === t, () => {
             STATE.type = t;
             STATE.selectedPath = "";
+            STATE.selectedTaskId = "";
             setHash();
             render();
           }));
@@ -124,6 +135,7 @@
           statusRow.appendChild(chipButton(s, STATE.status === s, () => {
             STATE.status = s;
             STATE.selectedPath = "";
+            STATE.selectedTaskId = "";
             setHash();
             render();
           }));
@@ -152,14 +164,22 @@
       }
 
       if (!items.length) {
-        list.appendChild(el("div", { class: "hint", text: "当前筛选条件下没有匹配的事项。" }));
+        list.appendChild(el("div", { class: "hint", text: isChannelFileMode ? "当前通道暂无可展示的文件资料。" : "当前筛选条件下没有匹配的事项。" }));
         return;
       }
 
       for (const it of items.slice(0, 260)) {
         const path = String(it.path || "");
+        const isTaskRow = STATE.view === "work" && isTaskItem(it);
+        const taskStatusMeta = isTaskRow ? taskDisplayStatusMeta(it, "待办") : null;
+        const rowClassName = [
+          "frow",
+          path && path === String(STATE.selectedPath || "") ? "active" : "",
+          isTaskRow ? "task-main-row" : "",
+          taskStatusMeta ? ("status-" + taskStatusMeta.key) : "",
+        ].filter(Boolean).join(" ");
         const row = el("div", {
-          class: "frow" + (path && path === String(STATE.selectedPath || "") ? " active" : ""),
+          class: rowClassName,
           "data-path": path
         });
         bindTaskScheduleDragSource(row, it);
@@ -171,7 +191,10 @@
         if (STATE.view === "work" && path && isTaskItem(it)) {
           const currentStatus = it.status || parseStatusFromTitle(it.title) || "待处理";
           const statusSelector = createStatusSelector(currentStatus, path, (result) => {
-            STATE.selectedPath = String((result && result.new_path) || path || "");
+            setSelectedTaskRef(
+              String((result && result.new_path) || path || ""),
+              taskStableIdOfItem(it)
+            );
             render();
           });
           titleOps.appendChild(statusSelector);
@@ -189,24 +212,35 @@
 
         row.appendChild(titleRow);
 
-        const meta = el("div", { class: "m" });
-        const primaryStatus = taskPrimaryStatus(it);
+        const meta = el("div", { class: "m" + (isTaskRow ? " task-main-meta" : "") });
         const flags = taskStatusFlags(it);
         if (STATE.view === "work") {
-          meta.appendChild(chip(primaryStatus || "未标记", taskPrimaryTone(primaryStatus)));
-          if (flags.supervised) meta.appendChild(chip("关注", "bad"));
-          if (flags.blocked) meta.appendChild(chip("阻塞", "bad"));
+          if (isTaskRow) meta.appendChild(buildTaskStatusChip(it, "待办"));
+          else if (isChannelFileMode) meta.appendChild(chip(inferKnowledgeGroupLabel(it), "muted"));
+          else meta.appendChild(chip(taskPrimaryStatus(it) || "未标记", taskPrimaryTone(taskPrimaryStatus(it))));
+          if (!isChannelFileMode && flags.supervised) meta.appendChild(chip("关注", "muted"));
         }
         if (STATE.project === "overview") meta.appendChild(chip(it.project_name || it.project_id, "muted"));
-        if (it.channel) meta.appendChild(chip(it.channel, "muted"));
+        if (!isTaskRow && it.channel && !isChannelFileMode) meta.appendChild(chip(it.channel, "muted"));
         if (it.code) meta.appendChild(chip(it.code, "muted"));
         const hasScheduleBtn = !!titleOps.querySelector(".taskschedule-entry-btn");
         if (isTaskScheduledByItem(it) && !hasScheduleBtn) meta.appendChild(chip("已排期", "good"));
-        if (it.owner) meta.appendChild(chip("负责人:" + it.owner, "muted"));
-        if (it.updated_at) meta.appendChild(chip("更新:" + it.updated_at, "muted"));
+        if (!isTaskRow && it.owner && !isChannelFileMode) meta.appendChild(chip("负责人:" + it.owner, "muted"));
+        if (it.updated_at) {
+          const updatedText = compactDateTime(it.updated_at) || shortDateTime(it.updated_at) || String(it.updated_at || "").trim();
+          meta.appendChild(chip("更新 " + updatedText, "muted"));
+        }
         row.appendChild(meta);
-        row.appendChild(el("div", { class: "p", text: path }));
-        row.addEventListener("click", () => setSelectedPath(it.path));
+        if (isTaskRow) {
+          row.appendChild(el("div", {
+            class: "task-main-summary",
+            text: taskSummaryText(it, "当前暂无补充说明。"),
+          }));
+          const roleGroups = buildTaskRoleGroups(it, { className: "task-main-role-groups" });
+          if (roleGroups) row.appendChild(roleGroups);
+        }
+        row.appendChild(el("div", { class: "p" + (isTaskRow ? " task-main-path" : ""), text: path }));
+        row.addEventListener("click", () => setSelectedTaskRef(it.path, taskStableIdOfItem(it)));
         list.appendChild(row);
       }
     }

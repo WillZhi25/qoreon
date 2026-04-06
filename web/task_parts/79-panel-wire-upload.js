@@ -13,7 +13,7 @@
       }
       // 根据模式切换侧边栏按钮显示
       const newChannelAsideBtn = document.getElementById("newChannelAsideBtn");
-      if (newChannelAsideBtn) newChannelAsideBtn.style.display = mode === "channel" ? "" : "none";
+      if (newChannelAsideBtn) newChannelAsideBtn.style.display = (mode === "channel" || mode === "conv") ? "" : "none";
     }
 
     const ASIDE_WIDTH_KEY = "taskDashboard.asideW";
@@ -150,6 +150,7 @@
       sessionDirectoryByProject: Object.create(null), // projectId -> all sessions (unfiltered)
       sessionDirectoryMetaByProject: Object.create(null), // projectId -> { liveLoaded, loadedAt, source, error }
       sessionDirectoryPromiseByProject: Object.create(null), // projectId -> Promise
+      pendingCreateBlocksByProject: Object.create(null), // projectId -> [{ id, channelName, state, error, formDraft }]
       runsBySession: Object.create(null),
       sessionTimelineMap: Object.create(null),
       projectRuns: [],
@@ -188,6 +189,11 @@
         groups: [],
         draftKey: "",
       },
+      globalMentionRefresh: {
+        busy: false,
+        error: "",
+        refreshedAt: "",
+      },
       memoBySessionKey: Object.create(null), // projectId::sessionId -> { count, items, updatedAt, fetchedAt }
       memoLoadingBySessionKey: Object.create(null),
       memoActionBusyBySessionKey: Object.create(null), // save|delete|clear|apply
@@ -196,6 +202,17 @@
       memoRequestSeqBySessionKey: Object.create(null),
       memoDrawerOpen: false,
       memoDrawerSessionKey: "",
+      taskDrawerOpen: false,
+      taskDrawerSessionKey: "",
+      taskDetailViewer: {
+        open: false,
+        sessionKey: "",
+        taskId: "",
+        taskPath: "",
+        groupTitle: "",
+        showActionContext: false,
+        fallbackRef: null,
+      },
       recentAgentsEnabled: true,
       recentAgentsBySessionKey: Object.create(null), // projectId::sessionId -> { count, items, updatedAt }
       recentAgentExpandedBySessionKey: Object.create(null), // projectId::sessionId -> bool
@@ -203,6 +220,10 @@
       fileStarredBySessionKey: loadSessionScopedMap(CONV_FILE_STARRED_KEY), // projectId::sessionId -> { fileKey:true }
       trainingSentBySessionKey: loadSessionScopedMap(CONV_TRAINING_SENT_KEY), // projectId::sessionId -> sentAt
       trainingDismissedBySessionKey: Object.create(null), // projectId::sessionId -> true
+      trainingManualOpenBySessionKey: Object.create(null), // projectId::sessionId -> true
+      startupHintDismissedBySessionKey: Object.create(null), // projectId::sessionId -> true
+      startupHintManualOpenBySessionKey: Object.create(null), // projectId::sessionId -> true
+      currentTaskStripCollapsedBySessionKey: Object.create(null), // projectId::sessionId -> true
       fileOnlyStarredBySessionKey: Object.create(null),
       fileSortBySessionKey: Object.create(null),
       fileTypeFilterBySessionKey: Object.create(null),
@@ -222,6 +243,7 @@
         userEdited: false,
         loadToken: 0,
       },
+      leftListScrollTop: 0,
       listScrollActiveUntil: 0,
       listScrollIdleTimer: 0,
       deferredPanelRender: false,
@@ -290,7 +312,8 @@
     }
 
     function isConversationListScrollActive() {
-      return false;
+      if (!isConversationDesktopMode()) return false;
+      return Number(PCONV.listScrollActiveUntil || 0) > Date.now();
     }
 
     function queueDeferredConversationRender(opts = {}) {
@@ -331,12 +354,23 @@
     }
 
     function markConversationListScrollActive() {
+      const scroller = document.querySelector("#channelAside .aside-scroll");
+      if (scroller) {
+        PCONV.leftListScrollTop = Math.max(0, Number(scroller.scrollTop || 0));
+      }
       if (PCONV.listScrollIdleTimer) {
         clearTimeout(PCONV.listScrollIdleTimer);
         PCONV.listScrollIdleTimer = 0;
       }
-      PCONV.listScrollActiveUntil = 0;
-      try { document.body.classList.remove("conv-list-scrolling"); } catch (_) {}
+      PCONV.listScrollActiveUntil = Date.now() + CONV_LIST_SCROLL_IDLE_MS;
+      try { document.body.classList.add("conv-list-scrolling"); } catch (_) {}
+      PCONV.listScrollIdleTimer = window.setTimeout(() => {
+        PCONV.listScrollIdleTimer = 0;
+        if (Number(PCONV.listScrollActiveUntil || 0) > Date.now()) return;
+        PCONV.listScrollActiveUntil = 0;
+        try { document.body.classList.remove("conv-list-scrolling"); } catch (_) {}
+        flushDeferredConversationRender();
+      }, CONV_LIST_SCROLL_IDLE_MS + 24);
     }
 
     function initConversationListScrollMonitor() {
@@ -553,6 +587,17 @@
       const trainingDesc = document.getElementById("convTrainingDesc");
       const trainingSendBtn = document.getElementById("convTrainingSendBtn");
       const trainingCloseBtn = document.getElementById("convTrainingCloseBtn");
+      const trainingReopenBtn = document.getElementById("convTrainingReopenBtn");
+      const startupHintContainer = document.getElementById("convStartupHint");
+      const startupHintTitle = document.getElementById("convStartupHintTitle");
+      const startupHintState = document.getElementById("convStartupHintState");
+      const startupHintDesc = document.getElementById("convStartupHintDesc");
+      const startupHintPrompt = document.getElementById("convStartupHintPrompt");
+      const startupHintActions = document.getElementById("convStartupHintActions");
+      const startupHintCopyBtn = document.getElementById("convStartupHintCopyBtn");
+      const startupHintSendBtn = document.getElementById("convStartupHintSendBtn");
+      const startupHintCloseBtn = document.getElementById("convStartupHintCloseBtn");
+      const startupHintReopenBtn = document.getElementById("convStartupHintReopenBtn");
       let recentAgentContainer = document.getElementById("convRecentAgents");
       let recentAgentToggle = document.getElementById("convRecentAgentsGlobalToggle");
       let mentionContainer = document.getElementById("convMentions");
@@ -600,9 +645,13 @@
           '<path d="M4.5 18.2c.6-2.4 2.6-3.9 5.1-3.9s4.4 1.5 5 3.9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>',
           '<path d="M14.4 17.1c.4-1.6 1.8-2.6 3.4-2.6 1 0 1.9.4 2.5 1.2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" opacity="0.72"/>',
           '</svg>',
+          '<span class="convrecentagents-global-toggle-count" aria-hidden="true" hidden></span>',
         ].join("");
         if (senderRow && senderRow.parentNode === composer) senderRow.appendChild(recentAgentToggle);
         else composer.appendChild(recentAgentToggle);
+      }
+      if (recentAgentToggle && !recentAgentToggle.querySelector(".convrecentagents-global-toggle-count")) {
+        recentAgentToggle.insertAdjacentHTML("beforeend", '<span class="convrecentagents-global-toggle-count" aria-hidden="true" hidden></span>');
       }
       if (recentAgentToggle && !recentAgentToggle.__recentAgentToggleBound) {
         recentAgentToggle.__recentAgentToggleBound = true;
@@ -644,6 +693,17 @@
         trainingDesc,
         trainingSendBtn,
         trainingCloseBtn,
+        trainingReopenBtn,
+        startupHintContainer,
+        startupHintTitle,
+        startupHintState,
+        startupHintDesc,
+        startupHintPrompt,
+        startupHintActions,
+        startupHintCopyBtn,
+        startupHintSendBtn,
+        startupHintCloseBtn,
+        startupHintReopenBtn,
         mentionContainer,
         replyContainer,
         mentionSuggest,
@@ -827,7 +887,7 @@
         });
         if (hasRunning) {
           hint.textContent = "Codex 正在处理该通道消息，日志会自动刷新。";
-          scheduleCCBPoll(5000);
+          scheduleCCBPoll(ccbPollDelay(true));
         } else {
           stopCCBPoll();
         }
@@ -985,6 +1045,7 @@
     function setPanelMode(nextMode) {
       const mode = normalizePanelMode(nextMode);
       if (STATE.panelMode === mode) return;
+      const prevMode = STATE.panelMode;
       STATE.panelMode = mode;
       if (mode === "task" && normalizeTaskModule(STATE.taskModule) === "org") {
         STATE.taskModule = "tasks";
@@ -993,9 +1054,24 @@
         PCONV.memoDrawerOpen = false;
         PCONV.memoDrawerSessionKey = "";
       }
-      if (mode === "task" || mode === "org" || mode === "arch") {
+      if (mode === "channel" && String(STATE.selectedSessionId || "").trim()) {
+        rememberConversationSelection(
+          String(STATE.project || ""),
+          String(STATE.channel || ""),
+          String(STATE.selectedSessionId || "")
+        );
+      }
+      if (mode === "org" || mode === "arch" || mode === "channel") {
         STATE.selectedSessionId = "";
         STATE.selectedSessionExplicit = false;
+        try { localStorage.removeItem("taskDashboard.selectedSessionId"); } catch (_) {}
+      }
+      if (mode === "conv") {
+        const rememberedSid = readRememberedConversationSelection(String(STATE.project || ""), String(STATE.channel || ""));
+        if (rememberedSid) {
+          STATE.selectedSessionId = rememberedSid;
+          if (prevMode === "channel") STATE.selectedSessionExplicit = true;
+        }
       }
       try {
         localStorage.setItem("taskDashboard.panelMode", STATE.panelMode);
@@ -1004,11 +1080,13 @@
       if (STATE.panelMode === "conv") {
         stopCCBPoll();
       } else {
-        // 任务模式下仍可能在看会话详情：仅在没有会话上下文时停止轮询。
-        if (!STATE.selectedSessionId && !PCONV.sending) stopConversationPoll();
+        if (!PCONV.sending) stopConversationPoll();
       }
       setHash();
       render();
+      if (STATE.panelMode === "conv" && typeof refreshConversationPanel === "function") {
+        refreshConversationPanel();
+      }
       // 移动端切换模式时回到列表视图
       if (isMobileViewport()) {
         showListView();
@@ -1020,7 +1098,10 @@
       let qTimer = 0;
       qEl.addEventListener("input", (e) => {
         STATE.q = e.target.value || "";
-        if (STATE.panelMode !== "conv") STATE.selectedPath = "";
+        if (STATE.panelMode !== "conv") {
+          STATE.selectedPath = "";
+          STATE.selectedTaskId = "";
+        }
         if (qTimer) clearTimeout(qTimer);
         qTimer = setTimeout(() => {
           setHash();
@@ -1071,8 +1152,9 @@
           if (isMobileViewport() && MOBILE_VIEW.current === "detail") {
             showListView();
             STATE.selectedPath = "";
-          STATE.selectedSessionId = "";
-          STATE.selectedSessionExplicit = false;
+            STATE.selectedTaskId = "";
+            STATE.selectedSessionId = "";
+            STATE.selectedSessionExplicit = false;
             updateSelectionUI();
             renderDetail(null);
             return;
@@ -1160,6 +1242,33 @@
           dismissConversationTrainingPrompt();
         });
       }
+      const ctr = document.getElementById("convTrainingReopenBtn");
+      if (ctr && !ctr.__convTrainingReopenBound) {
+        ctr.__convTrainingReopenBound = true;
+        ctr.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          reopenConversationTrainingPrompt();
+        });
+      }
+      const cshc = document.getElementById("convStartupHintCloseBtn");
+      if (cshc && !cshc.__convStartupHintCloseBound) {
+        cshc.__convStartupHintCloseBound = true;
+        cshc.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          dismissConversationTeamExpansionHint();
+        });
+      }
+      const cshr = document.getElementById("convStartupHintReopenBtn");
+      if (cshr && !cshr.__convStartupHintReopenBound) {
+        cshr.__convStartupHintReopenBound = true;
+        cshr.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          reopenConversationTeamExpansionHint();
+        });
+      }
       const cms = document.getElementById("convMemoSaveBtn");
       if (cms) cms.addEventListener("click", (e) => { e.preventDefault(); saveCurrentComposerAsMemo(); });
       const cet = document.getElementById("convEnterSendToggle");
@@ -1194,7 +1303,6 @@
       const newConvSessionId = document.getElementById("newConvSessionId");
       const newConvInitMessage = document.getElementById("newConvInitMessage");
       const ccbNewConvBtn = document.getElementById("ccbNewConvBtn");
-      const newConvMobileBtn = document.getElementById("newConvMobileBtn");
       const convSessionInfoMask = document.getElementById("convSessionInfoMask");
       const convSessionInfoCancelBtn = document.getElementById("convSessionInfoCancelBtn");
       const convSessionInfoSaveBtn = document.getElementById("convSessionInfoSaveBtn");
@@ -1303,13 +1411,6 @@
         });
       }
 
-      // 移动端的新增对话按钮
-      if (newConvMobileBtn) {
-        newConvMobileBtn.addEventListener("click", () => {
-          openNewConvModal(STATE.project, STATE.channel);
-        });
-      }
-
       initConversationResizeHandle();
 
       // 新增通道弹窗事件绑定
@@ -1329,20 +1430,27 @@
         location.reload();
       });
       bindNewChannelFormInputs();
+      if (newChannelMask) {
+        const syncNewChannelForm = (e) => {
+          const target = e && e.target;
+          const id = target && target.id;
+          if (!id || !["newChannelKind", "newChannelKindCustom", "newChannelIndex", "newChannelName", "newChannelDesc", "newChannelRequirement"].includes(id)) return;
+          if (!NEW_CHANNEL_UI.open) return;
+          renderNewChannelWorkflowUi();
+          if (NEW_CHANNEL_UI.phase !== "form") {
+            NEW_CHANNEL_UI.phase = "form";
+            setNewChannelVisible("newChannelReloadBtn", false);
+          }
+        };
+        newChannelMask.addEventListener("input", syncNewChannelForm);
+        newChannelMask.addEventListener("change", syncNewChannelForm);
+      }
       if (typeof initChannelManageUi === "function") initChannelManageUi();
 
       // 侧边栏的新增通道按钮
       if (newChannelAsideBtn) {
         newChannelAsideBtn.addEventListener("click", () => {
           openNewChannelModal();
-        });
-      }
-
-      // 通道对话区块的新增按钮
-      const channelConvNewBtn = document.getElementById("channelConvNewBtn");
-      if (channelConvNewBtn) {
-        channelConvNewBtn.addEventListener("click", () => {
-          openNewConvModal(STATE.project, STATE.channel);
         });
       }
 
@@ -1441,6 +1549,7 @@
       const tm = params.get("tm");
       const tl = params.get("tl");
       const cl = params.get("cl");
+      const sid = params.get("sid");
       HASH_BOOTSTRAP.projectOnly = false;
       if (p && pages().some(x => x.id === p)) STATE.project = p;
       else if (!hasProjectParam && preferredProjectId && pages().some(x => x.id === preferredProjectId)) {
@@ -1460,14 +1569,18 @@
         if (allowed.has(lane)) STATE.taskLane = lane;
       }
       if (cl) STATE.convListLayout = normalizeConversationListLayout(cl);
-      else if (pm === "c") STATE.convListLayout = "flat";
+      else if (pm === "c") STATE.convListLayout = "channel";
+      if (sid !== null) {
+        STATE.selectedSessionId = String(sid || "").trim();
+        STATE.selectedSessionExplicit = !!String(STATE.selectedSessionId || "").trim();
+      }
       if (vm === "c") STATE.view = "comms";
       if (vm === "w") STATE.view = "work";
-      if (pm === "c") STATE.panelMode = "conv";
+      if (pm === "c" || pm === "conv") STATE.panelMode = "conv";
       else if (pm === "g" || pm === "a" || pm === "arch") STATE.panelMode = "arch";
       else if (pm === "og" || pm === "org") STATE.panelMode = "org";
-      else if (pm === "t") STATE.panelMode = "task";
-      else if (pm === "o" || pm === "ch") STATE.panelMode = "channel";
+      else if (pm === "t" || pm === "task") STATE.panelMode = "task";
+      else if (pm === "o" || pm === "ch" || pm === "channel") STATE.panelMode = "channel";
       if (STATE.panelMode === "task" && normalizeTaskModule(STATE.taskModule) === "org") {
         STATE.panelMode = "org";
       }
@@ -1514,8 +1627,9 @@
         else if (STATE.panelMode === "arch") params.set("pm", "g");
         else if (STATE.panelMode === "org") params.set("pm", "og");
         else if (STATE.panelMode === "task") params.set("pm", "t");
+        if (STATE.selectedSessionId) params.set("sid", String(STATE.selectedSessionId));
         const convLayout = normalizeConversationListLayout(STATE.convListLayout);
-        if (convLayout !== "flat") params.set("cl", convLayout);
+        if (convLayout !== "channel") params.set("cl", convLayout);
         const moduleMode = normalizeTaskModule(STATE.taskModule);
         if (moduleMode !== "tasks") params.set("tm", moduleMode);
         if (STATE.taskLane && STATE.taskLane !== "全部") params.set("tl", STATE.taskLane);
@@ -1567,6 +1681,7 @@
         refreshConversationPanel();
       } else if (STATE.panelMode === "org" || STATE.panelMode === "arch") {
         STATE.selectedPath = "";
+        STATE.selectedTaskId = "";
         STATE.selectedSessionId = "";
         STATE.selectedSessionExplicit = false;
         stopCCBPoll();
@@ -1575,6 +1690,9 @@
         updateSelectionUI();
       } else {
         if (STATE.panelMode === "channel") {
+          STATE.selectedSessionId = "";
+          STATE.selectedSessionExplicit = false;
+          try { localStorage.removeItem("taskDashboard.selectedSessionId"); } catch (_) {}
           // 通道模式下加载对话数据，然后构建通道对话列表
           loadProjectConversations(STATE.project).then(() => {
             renderChannelInfoCard();
@@ -1583,6 +1701,11 @@
           // 同时也立即调用一次（使用缓存数据），确保切换通道时列表更新
           buildChannelConversationList();
         } else {
+          const rememberedSid = readRememberedConversationSelection(String(STATE.project || ""), String(STATE.channel || ""));
+          if (rememberedSid) {
+            STATE.selectedSessionId = rememberedSid;
+            STATE.selectedSessionExplicit = true;
+          }
           buildChannelConversationList();
         }
         ensureSelection();
@@ -1608,6 +1731,7 @@
       } catch (_) {}
 
       const rawHash = String(window.location.hash || "").replace(/^#/, "").trim();
+      const hasConvLayoutInHash = /(?:^|&)cl=/.test(rawHash);
       const shouldUseDefaultChannelLanding = !rawHash;
       try {
         const vm = localStorage.getItem("taskDashboard.view");
@@ -1615,7 +1739,7 @@
         const convSort = localStorage.getItem("taskDashboard.convSort");
         if (convSort) STATE.convSort = normalizeConversationSort(convSort);
         const convListLayout = localStorage.getItem("taskDashboard.convListLayout");
-        if (convListLayout) STATE.convListLayout = normalizeConversationListLayout(convListLayout);
+        if (convListLayout && hasConvLayoutInHash) STATE.convListLayout = normalizeConversationListLayout(convListLayout);
         const itemSort = localStorage.getItem("taskDashboard.itemSort");
         if (itemSort) STATE.itemSort = normalizeItemSort(itemSort);
         const pm = localStorage.getItem("taskDashboard.panelMode");
@@ -1635,16 +1759,20 @@
         }
         const sp = localStorage.getItem("taskDashboard.selectedPath");
         if (sp) STATE.selectedPath = normalizeScheduleTaskPath(sp);
+        const stid = localStorage.getItem("taskDashboard.selectedTaskId");
+        if (stid) STATE.selectedTaskId = String(stid || "").trim();
         const ss = localStorage.getItem("taskDashboard.selectedSessionId");
         if (ss) STATE.selectedSessionId = ss;
         if (shouldUseDefaultChannelLanding) {
           STATE.panelMode = "channel";
           STATE.selectedPath = "";
+          STATE.selectedTaskId = "";
           STATE.selectedSessionId = "";
           STATE.selectedSessionExplicit = false;
           localStorage.setItem("taskDashboard.panelMode", "channel");
           localStorage.setItem("taskDashboard.panelModeVer", "2");
           localStorage.removeItem("taskDashboard.selectedPath");
+          localStorage.removeItem("taskDashboard.selectedTaskId");
           localStorage.removeItem("taskDashboard.selectedSessionId");
         }
       } catch (_) {}
@@ -1671,6 +1799,7 @@
       initConversationListScrollMonitor();
       initConversationMemoUi();
       initConversationFileUi();
+      initConversationTaskUi();
       render();
     }
 

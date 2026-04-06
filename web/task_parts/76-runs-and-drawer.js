@@ -17,6 +17,8 @@
         const top = el("div", { class: "top" });
         top.appendChild(el("div", { class: "id", text: (r.createdAt || "") + " · " + (r.id || "") }));
         const st = String(r.status || "");
+        const runDisplayState = getRunDisplayState(r, detailMeta);
+        const outcomeMeta = buildRunOutcomeMeta(r, detailMeta);
         const cliType = String(r.cliType || r.cli_type || "").trim().toLowerCase();
         const suppressTerminalTextLegacyPreview = isTerminalTextCli(cliType);
         top.appendChild(chip(st, st === "done" ? "good" : (st === "error" ? "bad" : "warn")));
@@ -24,6 +26,7 @@
         const metaBar = el("div", { class: "run-context-meta" });
         const stateSourceChip = buildRunDisplayStateSourceChip(r, detailMeta);
         if (stateSourceChip) metaBar.appendChild(stateSourceChip);
+        if (outcomeMeta) metaBar.appendChild(chip(outcomeMeta.label, outcomeMeta.tone));
         const execSourceChip = buildProjectExecutionContextCompactChip(
           (detailMeta && detailMeta.full && detailMeta.full.run && detailMeta.full.run.project_execution_context)
           || (r && (r.project_execution_context || r.projectExecutionContext))
@@ -39,6 +42,8 @@
           row.appendChild(el("div", { class: "err", text: "error: " + (err || "执行失败（未返回具体错误文本）") }));
           const eh = String(r.errorHint || "").trim();
           if (eh) row.appendChild(el("div", { class: "hint", text: eh }));
+        } else if (outcomeMeta && outcomeMeta.subtitle && (runDisplayState === "interrupted" || runDisplayState === "done")) {
+          row.appendChild(el("div", { class: "hint", text: outcomeMeta.subtitle }));
         }
         const partial = suppressTerminalTextLegacyPreview ? "" : String(r.partialPreview || "").trim();
         if (partial) {
@@ -76,7 +81,8 @@
           });
           btns.appendChild(cancelRetryBtn);
         }
-        if (st === "error") {
+        const allowRecoveryOps = st === "error" || (runDisplayState === "interrupted" && outcomeMeta && outcomeMeta.outcomeState === "interrupted_infra");
+        if (allowRecoveryOps) {
           const recoverBtn = el("button", { class: "btn", text: "回收结果" });
           recoverBtn.addEventListener("click", async (e) => {
             e.stopPropagation();
@@ -296,7 +302,20 @@
       const sid = String(sessionId || "").trim();
       if (!sid) return null;
       const sessions = Array.isArray(PCONV.sessions) ? PCONV.sessions : [];
-      return sessions.find((x) => String((x && (x.sessionId || x.id)) || "") === sid) || null;
+      const liveHit = sessions.find((x) => String((x && (x.sessionId || x.id)) || "") === sid) || null;
+      if (liveHit) return liveHit;
+      const projectId = String((STATE && STATE.project) || "").trim();
+      const directory = (
+        projectId
+        && PCONV.sessionDirectoryByProject
+        && Array.isArray(PCONV.sessionDirectoryByProject[projectId])
+      )
+        ? PCONV.sessionDirectoryByProject[projectId]
+        : [];
+      const directoryHit = directory.find((x) => String((x && (x.sessionId || x.id)) || "") === sid) || null;
+      if (directoryHit) return directoryHit;
+      const configured = projectId ? configuredProjectConversations(projectId) : [];
+      return configured.find((x) => String((x && (x.sessionId || x.id)) || "") === sid) || null;
     }
 
     function findPrimaryConversationSession(channelName) {
@@ -563,36 +582,117 @@
       }
     }
 
+    function buildConversationChannelManageMenu(projectId, channelName) {
+      const channel = String(channelName || "").trim();
+      if (!channel) return null;
+      const pid = String(projectId || STATE.project || "").trim();
+      const menu = el("div", {
+        class: "channel-row-menu conv-channel-manage-menu",
+        "data-channel-name": channel,
+        role: "menu",
+        "aria-label": "通道操作",
+      });
+      const appendMenuItem = (title, desc, onClick, danger = false) => {
+        if (typeof buildChannelManageMenuItem === "function") {
+          menu.appendChild(buildChannelManageMenuItem(title, desc, onClick, danger));
+          return;
+        }
+        const btn = el("button", {
+          class: "channel-row-menu-item" + (danger ? " danger" : ""),
+          type: "button",
+        });
+        btn.appendChild(el("div", { class: "channel-row-menu-item-title", text: title }));
+        btn.appendChild(el("div", { class: "channel-row-menu-item-desc", text: desc }));
+        btn.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          onClick && onClick();
+        });
+        menu.appendChild(btn);
+      };
+      appendMenuItem(
+        "找 Agent 编辑",
+        "把通道说明与边界整理成正式派发消息",
+        () => typeof openChannelEditAgentModal === "function" && openChannelEditAgentModal(pid, channel),
+      );
+      appendMenuItem(
+        "删除通道",
+        "删除通道目录与配套文件夹，保留 .runtime/.runs 历史",
+        () => typeof openChannelDeleteModal === "function" && openChannelDeleteModal(pid, channel),
+        true,
+      );
+      return menu;
+    }
+
     function buildConversationLeftList() {
       const left = document.getElementById("leftList");
       const asideTitle = document.getElementById("asideTitle");
       const asideMeta = document.getElementById("asideMeta");
       const layoutTabs = document.getElementById("convLayoutTabs");
-      const layoutBtns = Array.from(document.querySelectorAll("[data-conv-layout]"));
-      left.innerHTML = "";
-      asideTitle.textContent = "";
-      if (layoutTabs) layoutTabs.style.display = "inline-flex";
-      const layoutMode = normalizeConversationListLayout(STATE.convListLayout);
-      layoutBtns.forEach((btn) => {
-        const mode = normalizeConversationListLayout(btn.getAttribute("data-conv-layout") || "flat");
-        const active = mode === layoutMode;
-        btn.classList.toggle("active", active);
-        btn.setAttribute("aria-selected", active ? "true" : "false");
-      });
+      if (!left || !asideTitle || !asideMeta) return;
+      if (typeof closeChannelManageMenus === "function") closeChannelManageMenus();
+      const scrollBox = left.closest(".aside-scroll") || left;
+      const prevScrollTop = Math.max(0, Number(scrollBox.scrollTop || 0));
+      const savedScrollTop = Math.max(0, Number((PCONV && PCONV.leftListScrollTop) || 0));
+      const targetScrollTop = prevScrollTop > 0 ? prevScrollTop : savedScrollTop;
+      if (PCONV) PCONV.leftListScrollTop = targetScrollTop;
+      const restoreLeftScroll = () => {
+        if (!(targetScrollTop > 0)) {
+          if (PCONV) PCONV.leftListScrollTop = 0;
+          return;
+        }
+        requestAnimationFrame(() => {
+          const currentLeft = document.getElementById("leftList");
+          if (!currentLeft) return;
+          const currentScrollBox = currentLeft.closest(".aside-scroll") || currentLeft;
+          const maxScrollTop = Math.max(0, Number(currentScrollBox.scrollHeight || 0) - Number(currentScrollBox.clientHeight || 0));
+          const nextScrollTop = Math.min(targetScrollTop, maxScrollTop);
+          currentScrollBox.scrollTop = nextScrollTop;
+          if (PCONV) PCONV.leftListScrollTop = nextScrollTop;
+        });
+      };
+      const commitLeftChildren = (fragment, { preserveScroll = true } = {}) => {
+        left.replaceChildren(fragment);
+        if (preserveScroll) restoreLeftScroll();
+        else if (PCONV) PCONV.leftListScrollTop = 0;
+      };
+      asideTitle.textContent = "对话";
+      const currentLayout = normalizeConversationListLayout(STATE && STATE.convListLayout);
+      if (layoutTabs) {
+        layoutTabs.style.display = "";
+        const buttons = Array.from(layoutTabs.querySelectorAll("[data-conv-layout]"));
+        buttons.forEach((btn) => {
+          const mode = normalizeConversationListLayout(btn.getAttribute("data-conv-layout") || "flat");
+          const active = mode === currentLayout;
+          btn.classList.toggle("active", active);
+          btn.setAttribute("aria-selected", active ? "true" : "false");
+        });
+      }
 
       if (STATE.project === "overview") {
         asideMeta.innerHTML = "";
         asideMeta.appendChild(metaPill("请选择具体项目", "warn"));
-        left.appendChild(el("div", { class: "hint", text: "总揽模式下不展示会话，请先选择具体项目。" }));
+        const overviewFragment = document.createDocumentFragment();
+        overviewFragment.appendChild(el("div", { class: "hint", text: "总揽模式下不展示会话，请先选择具体项目。" }));
+        commitLeftChildren(overviewFragment, { preserveScroll: false });
         return;
       }
 
-      const sessions = sortedConversationSessions(PCONV.sessions);
+      const projectId = String(STATE.project || "").trim();
+      const sessions = sortedConversationSessions(conversationSessionsForProject(projectId));
+      const channelNameSet = new Set(unionChannelNames(projectId));
+      sessions.forEach((session) => {
+        const channelName = String(getSessionChannelName(session) || "").trim();
+        if (channelName) channelNameSet.add(channelName);
+      });
+      const channelNames = Array.from(channelNameSet).filter(Boolean).sort((a, b) => a.localeCompare(b, "zh-Hans-CN"));
       const activeRuns = sessions.filter((s) => {
         const st = String(getSessionStatus(s) || "").trim().toLowerCase();
         return st === "queued" || st === "running" || st === "retry_waiting" || st === "external_busy";
       }).length;
+
       asideMeta.innerHTML = "";
+      asideMeta.appendChild(metaPill("通道 " + channelNames.length, "muted"));
       asideMeta.appendChild(metaPill("会话 " + sessions.length, "muted"));
       asideMeta.appendChild(metaPill("运行 " + activeRuns, activeRuns > 0 ? "warn" : "good"));
       asideMeta.appendChild(metaPill("刷新 " + (PCONV.lastRefreshAt || "-"), "muted"));
@@ -609,41 +709,102 @@
       sortWrap.appendChild(sortSel);
       asideMeta.appendChild(sortWrap);
 
-      if (!sessions.length) {
-        left.appendChild(el("div", { class: "hint", text: "当前项目没有可用会话（请先在配置里维护 session_id）。" }));
+      const leftFragment = document.createDocumentFragment();
+      if (!channelNames.length) {
+        leftFragment.appendChild(el("div", { class: "hint", text: "当前项目没有可用通道，请先新增通道。" }));
+        commitLeftChildren(leftFragment, { preserveScroll: false });
         return;
       }
 
-      const appendSessionRow = (s, containerNode) => {
-        const sid = getSessionId(s);
-        const row = buildConversationRow(s, STATE.selectedSessionId === sid, (nextSid) => {
+      const appendSessionRow = (session, containerNode) => {
+        const sid = getSessionId(session);
+        const row = buildConversationRow(session, STATE.selectedSessionId === sid, (nextSid) => {
           setSelectedSessionId(nextSid, true, { explicit: true });
           closeDrawerOnMobile();
-        }, { showCountDots: true, projectId: STATE.project });
+        }, { showCountDots: true, projectId });
         containerNode.appendChild(row);
       };
 
-      if (layoutMode === "channel") {
-        const grouped = groupedConversationSessionsByChannel(sessions);
-        grouped.forEach((group) => {
-          const box = el("section", { class: "conv-channel-group" });
-          const head = el("div", { class: "conv-channel-group-head" });
-          head.appendChild(el("div", {
-            class: "conv-channel-group-title",
-            text: String(group.channelName || "未命名通道"),
-            title: String(group.channelName || "未命名通道"),
-          }));
-          head.appendChild(chip("会话 " + Number((group.sessions && group.sessions.length) || 0), "muted"));
-          box.appendChild(head);
-          const listNode = el("div", { class: "conv-channel-group-list" });
-          (Array.isArray(group.sessions) ? group.sessions : []).forEach((s) => appendSessionRow(s, listNode));
-          box.appendChild(listNode);
-          left.appendChild(box);
-        });
+      if (currentLayout === "flat") {
+        sessions.forEach((session) => appendSessionRow(session, leftFragment));
+        commitLeftChildren(leftFragment);
         return;
       }
 
-      sessions.forEach((s) => appendSessionRow(s, left));
+      const buildTextAction = (text, title, onClick, extraClass = "") => {
+        const btn = el("button", {
+          class: "conv-channel-action-btn" + (extraClass ? (" " + extraClass) : ""),
+          type: "button",
+          text,
+          title,
+          "aria-label": title || text,
+        });
+        btn.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          onClick && onClick(e);
+        });
+        return btn;
+      };
+
+      channelNames.forEach((channelName) => {
+        const channelSessions = conversationSessionsForChannel(channelName, projectId);
+        const sessionCount = channelSessions.length;
+        const box = el("section", { class: "conv-channel-group" });
+        const head = el("div", { class: "conv-channel-group-head" });
+        head.appendChild(el("div", {
+          class: "conv-channel-group-title",
+          text: channelName,
+          title: channelName,
+        }));
+
+        const headSide = el("div", { class: "channel-row-tools conv-channel-group-side" });
+        const actionWrap = el("div", { class: "conv-channel-group-actions" });
+        actionWrap.appendChild(buildTextAction(
+          "+对话",
+          "在“" + channelName + "”中新增对话",
+          () => typeof openNewConvModal === "function" && openNewConvModal(projectId, channelName),
+        ));
+        actionWrap.appendChild(buildTextAction(
+          "管理对话",
+          "管理“" + channelName + "”下的对话",
+          () => typeof openChannelConversationManageModal === "function" && openChannelConversationManageModal(projectId, channelName),
+        ));
+        const manageBtn = buildTextAction(
+          "编辑通道",
+          "管理“" + channelName + "”的现有能力",
+          () => typeof toggleChannelManageMenu === "function" && toggleChannelManageMenu(channelName),
+          "channel-row-menu-trigger"
+        );
+        manageBtn.setAttribute("data-channel-name", channelName);
+        manageBtn.setAttribute("aria-haspopup", "menu");
+        manageBtn.setAttribute("aria-expanded", "false");
+        actionWrap.appendChild(manageBtn);
+        headSide.appendChild(actionWrap);
+        headSide.appendChild(el("span", {
+          class: "conv-channel-group-count",
+          text: "会话 " + sessionCount,
+          title: "当前通道会话数量",
+        }));
+        const manageMenu = buildConversationChannelManageMenu(projectId, channelName);
+        if (manageMenu) headSide.appendChild(manageMenu);
+        head.appendChild(headSide);
+        box.appendChild(head);
+
+        const listNode = el("div", { class: "conv-channel-group-list" });
+        if (channelSessions.length) {
+          channelSessions.forEach((session) => appendSessionRow(session, listNode));
+        } else {
+          listNode.appendChild(el("div", {
+            class: "conv-channel-empty",
+            text: "暂无对话",
+            title: "当前通道暂无对话，可从右侧“+对话”开始新增",
+          }));
+        }
+        box.appendChild(listNode);
+        leftFragment.appendChild(box);
+      });
+      commitLeftChildren(leftFragment);
     }
 
     // 在主列表区域渲染会话列表（供移动端对话模式使用）
@@ -748,50 +909,10 @@
 
     // 构建任务模式下的通道对话列表
     function buildChannelConversationList() {
+      const box = document.getElementById("channelConvBox");
       const container = document.getElementById("channelConvList");
-      if (!container) return;
-      container.innerHTML = "";
-
-      // 只在通道模式下显示
-      if (STATE.panelMode !== "channel") {
-        document.getElementById("channelConvBox").style.display = "none";
-        buildChannelKnowledgeList();
-        return;
-      }
-      document.getElementById("channelConvBox").style.display = "";
-
-      // 获取当前通道相关的对话
-      const projectId = String(STATE.project || "");
-      const channelName = String(STATE.channel || "");
-
-      if (!projectId || projectId === "overview" || !channelName) {
-        container.appendChild(el("div", { class: "hint", text: "请先选择项目通道" }));
-        buildChannelKnowledgeList();
-        return;
-      }
-
-      // 与通道统计统一口径：展示当前通道的全部会话
-      const sessions = conversationSessionsForChannel(channelName, projectId);
-
-      if (!sessions.length) {
-        container.appendChild(el("div", { class: "hint", text: "当前通道暂无对话，点击右上角 [+] 新增" }));
-        buildChannelKnowledgeList();
-        return;
-      }
-
-      for (const s of sessions) {
-        const sid = getSessionId(s);
-        const scoped = {
-          ...(s || {}),
-          channel_name: channelName,
-          primaryChannel: channelName,
-          displayChannel: firstNonEmptyText([channelName, s && s.displayChannel, s && s.alias]),
-        };
-        const row = buildConversationRow(scoped, STATE.selectedSessionId === sid, (nextSid) => {
-          setSelectedSessionId(nextSid, true, { explicit: true });
-        }, { projectId });
-        container.appendChild(row);
-      }
+      if (box) box.style.display = "none";
+      if (container) container.innerHTML = "";
       buildChannelKnowledgeList();
     }
 
@@ -872,12 +993,26 @@
     function setSelectedSessionId(sessionId, forceScroll = false, opts = {}) {
       const sid = String(sessionId || "").trim();
       if (!sid) return;
+      if (STATE.panelMode === "channel") {
+        STATE.selectedSessionId = "";
+        STATE.selectedSessionExplicit = false;
+        try { localStorage.removeItem("taskDashboard.selectedSessionId"); } catch (_) {}
+        buildChannelConversationList();
+        renderDetail(selectedItem());
+        setHash();
+        return;
+      }
       const changed = sid !== String(STATE.selectedSessionId || "");
       const hasExplicitFlag = Object.prototype.hasOwnProperty.call(opts || {}, "explicit");
       const explicit = hasExplicitFlag ? !!opts.explicit : STATE.selectedSessionExplicit;
       STATE.selectedSessionId = sid;
       STATE.selectedSessionExplicit = explicit;
       try { localStorage.setItem("taskDashboard.selectedSessionId", STATE.selectedSessionId); } catch (_) {}
+      rememberConversationSelection(
+        String(STATE.project || ""),
+        String(STATE.channel || ""),
+        STATE.selectedSessionId
+      );
       // 只在对话模式下更新左侧对话列表
       if (STATE.panelMode === "conv") {
         buildConversationLeftList();
@@ -897,19 +1032,43 @@
 
     function currentConversationCtx() {
       if (STATE.project === "overview") return null;
-      const sid = String(STATE.selectedSessionId || "").trim();
-      if (!sid) return null;
-      const sessions = Array.isArray(PCONV.sessions) ? PCONV.sessions : [];
-      // 兼容 sessionId 和 id 两种字段名
-      const cur = sessions.find(x => String(x.sessionId || x.id || "") === sid) || null;
-      if (!cur) return null;
+      if (STATE.panelMode === "channel") return null;
+      const projectId = String(STATE.project || "").trim();
+      if (!projectId) return null;
+      const scopedChannel = String(STATE.channel || "").trim();
+      let sid = String(STATE.selectedSessionId || "").trim();
+      let cur = sid ? findConversationSessionById(sid) : null;
+      if (!cur) {
+        const rememberedSid = readRememberedConversationSelection(projectId, scopedChannel);
+        if (rememberedSid) {
+          sid = String(rememberedSid || "").trim();
+          cur = sid ? findConversationSessionById(sid) : null;
+        }
+      }
+      if (!cur) {
+        const directory = Array.isArray(PCONV.sessionDirectoryByProject && PCONV.sessionDirectoryByProject[projectId])
+          ? PCONV.sessionDirectoryByProject[projectId].slice()
+          : mergeConversationSessions(configuredProjectConversations(projectId), []);
+        const preferredSid = pickDefaultConversationSessionId(directory, scopedChannel);
+        if (preferredSid) {
+          sid = String(preferredSid || "").trim();
+          cur = sid ? findConversationSessionById(sid) : null;
+          if (!cur) {
+            cur = directory.find((x) => String((x && (x.sessionId || x.id)) || "") === sid) || null;
+          }
+        }
+      }
+      if (!sid || !cur) return null;
       const cliType = cur && cur.cli_type ? String(cur.cli_type).trim() : "codex";
-      const scopedChannel = STATE.panelMode === "channel" ? String(STATE.channel || "").trim() : "";
-      // 兼容 channel_name 和 primaryChannel 两种字段名
-      const channelName = String(scopedChannel || cur.channel_name || cur.primaryChannel || "");
+      const channelName = String(firstNonEmptyText([
+        scopedChannel && sessionMatchesChannel(cur, scopedChannel) ? scopedChannel : "",
+        getSessionChannelName(cur),
+        cur.channel_name,
+        cur.primaryChannel,
+      ]) || "");
       const agentName = conversationAgentName(cur);
       return {
-        projectId: String(STATE.project || ""),
+        projectId,
         sessionId: sid,
         channelName: channelName,
         displayChannel: String(agentName || cur.displayChannel || cur.alias || channelName || ""),
@@ -1007,6 +1166,7 @@
       const rid = String(runId || "");
       if (!rid) return;
       const now = Date.now();
+      const loadingStaleMs = 15000;
       const maxAgeMsRaw = Number(opts.maxAgeMs || 0);
       const maxAgeMs = Number.isFinite(maxAgeMsRaw) && maxAgeMsRaw > 0 ? maxAgeMsRaw : 0;
       const force = !!opts.force;
@@ -1015,7 +1175,18 @@
       const onLoaded = typeof opts.onLoaded === "function" ? opts.onLoaded : null;
       const terminalSyncStatus = String(opts.terminalSyncStatus || "").trim().toLowerCase();
       const prev = PCONV.detailMap[rid] || null;
-      if (prev && prev.loading) return;
+      if (prev && prev.loading) {
+        const loadingStartedAt = Number(prev.loadingStartedAt || 0);
+        const loadingTooLong = loadingStartedAt > 0 && (now - loadingStartedAt) >= loadingStaleMs;
+        if (!loadingTooLong) {
+          if (onLoaded) {
+            const pendingCallbacks = Array.isArray(prev.onLoadedQueue) ? prev.onLoadedQueue : [];
+            pendingCallbacks.push(onLoaded);
+            prev.onLoadedQueue = pendingCallbacks;
+          }
+          return;
+        }
+      }
       if (prev && !force) {
         if (terminalSyncStatus && String(prev.terminalSyncStatus || "").toLowerCase() === terminalSyncStatus) {
           const lastSyncAt = Number(prev.terminalSyncAt || 0);
@@ -1025,40 +1196,65 @@
         const fetchedAt = Number(prev.fetchedAt || 0);
         if (fetchedAt > 0 && (now - fetchedAt) < maxAgeMs) return;
       }
+      const requestKey = "detail-" + String(now) + "-" + Math.random().toString(36).slice(2, 8);
+      const onLoadedQueue = [];
+      if (prev && Array.isArray(prev.onLoadedQueue) && prev.onLoadedQueue.length) {
+        onLoadedQueue.push.apply(onLoadedQueue, prev.onLoadedQueue);
+      }
+      if (onLoaded) onLoadedQueue.push(onLoaded);
       PCONV.detailMap[rid] = {
         loading: true,
         full: prev && prev.full ? prev.full : null,
         error: "",
         fetchedAt: prev && prev.fetchedAt ? prev.fetchedAt : 0,
+        loadingStartedAt: now,
+        requestKey,
+        onLoadedQueue,
         terminalSyncStatus: terminalSyncStatus || (prev && prev.terminalSyncStatus ? prev.terminalSyncStatus : ""),
         terminalSyncAt: terminalSyncStatus ? now : Number((prev && prev.terminalSyncAt) || 0),
       };
       loadRun(rid).then((full) => {
+        const current = PCONV.detailMap[rid] || null;
+        if (current && current.requestKey && current.requestKey !== requestKey) return;
+        const callbackQueue = Array.isArray(current && current.onLoadedQueue) ? current.onLoadedQueue.slice() : [];
         PCONV.detailMap[rid] = {
           loading: false,
           full,
           error: "",
           fetchedAt: Date.now(),
+          loadingStartedAt: 0,
+          requestKey: "",
+          onLoadedQueue: [],
           terminalSyncStatus: terminalSyncStatus || (prev && prev.terminalSyncStatus ? prev.terminalSyncStatus : ""),
           terminalSyncAt: terminalSyncStatus ? Date.now() : Number((prev && prev.terminalSyncAt) || 0),
         };
         if (syncList) refreshConversationCountDots();
-        if (onLoaded) {
-          try { onLoaded(full, null); } catch (_) {}
+        if (callbackQueue.length) {
+          callbackQueue.forEach((cb) => {
+            try { cb(full, null); } catch (_) {}
+          });
         }
         if (!skipRender) renderConversationDetail();
       }).catch((e) => {
+        const current = PCONV.detailMap[rid] || null;
+        if (current && current.requestKey && current.requestKey !== requestKey) return;
+        const callbackQueue = Array.isArray(current && current.onLoadedQueue) ? current.onLoadedQueue.slice() : [];
         PCONV.detailMap[rid] = {
           loading: false,
           full: prev && prev.full ? prev.full : null,
           error: String(e || "load failed"),
           fetchedAt: prev && prev.fetchedAt ? prev.fetchedAt : 0,
+          loadingStartedAt: 0,
+          requestKey: "",
+          onLoadedQueue: [],
           terminalSyncStatus: terminalSyncStatus || (prev && prev.terminalSyncStatus ? prev.terminalSyncStatus : ""),
           terminalSyncAt: terminalSyncStatus ? Date.now() : Number((prev && prev.terminalSyncAt) || 0),
         };
         if (syncList) refreshConversationCountDots();
-        if (onLoaded) {
-          try { onLoaded(prev && prev.full ? prev.full : null, e); } catch (_) {}
+        if (callbackQueue.length) {
+          callbackQueue.forEach((cb) => {
+            try { cb(prev && prev.full ? prev.full : null, e); } catch (_) {}
+          });
         }
         if (!skipRender) renderConversationDetail();
       });
@@ -1153,6 +1349,102 @@
       return samples.some((item) => isInterruptedByUserText(item));
     }
 
+    function getRunOutcomeState(runMeta, detailMeta = null) {
+      const run = (runMeta && typeof runMeta === "object") ? runMeta : {};
+      const detail = (detailMeta && typeof detailMeta === "object") ? detailMeta : null;
+      const detailRun = detail && detail.full && detail.full.run && typeof detail.full.run === "object"
+        ? detail.full.run
+        : {};
+      return normalizeRunOutcomeState(firstNonEmptyText([
+        detailRun.outcome_state,
+        detailRun.outcomeState,
+        run.outcome_state,
+        run.outcomeState,
+      ]), "");
+    }
+
+    function getRunErrorClass(runMeta, detailMeta = null) {
+      const run = (runMeta && typeof runMeta === "object") ? runMeta : {};
+      const detail = (detailMeta && typeof detailMeta === "object") ? detailMeta : null;
+      const detailRun = detail && detail.full && detail.full.run && typeof detail.full.run === "object"
+        ? detail.full.run
+        : {};
+      return normalizeRunErrorClass(firstNonEmptyText([
+        detailRun.error_class,
+        detailRun.errorClass,
+        run.error_class,
+        run.errorClass,
+      ]), "");
+    }
+
+    function buildRunOutcomeMeta(runMeta, detailMeta = null) {
+      const outcomeState = getRunOutcomeState(runMeta, detailMeta);
+      const errorClass = getRunErrorClass(runMeta, detailMeta);
+      if (!outcomeState) return null;
+      if (outcomeState === "success") {
+        return {
+          outcomeState,
+          errorClass,
+          label: "业务结果",
+          tone: "good",
+          subtitle: "当前结果进入业务摘要主位",
+        };
+      }
+      if (outcomeState === "interrupted_infra") {
+        return {
+          outcomeState,
+          errorClass,
+          label: "环境中断",
+          tone: "warn",
+          subtitle: "基础设施中断，不按业务失败处理",
+        };
+      }
+      if (outcomeState === "interrupted_user") {
+        return {
+          outcomeState,
+          errorClass,
+          label: "人工打断",
+          tone: "muted",
+          subtitle: "由用户或人工操作打断，不按业务失败处理",
+        };
+      }
+      if (outcomeState === "failed_config") {
+        const configText = errorClass === "session_binding"
+          ? "会话绑定异常，需修正 session 或路由配置"
+          : (errorClass === "workspace_permission"
+            ? "工作区权限异常，需修正路径或权限边界"
+            : (errorClass === "cli_path"
+              ? "CLI 配置异常，需检查执行器或命令路径"
+              : "配置或绑定存在异常，需先修正环境"));
+        return {
+          outcomeState,
+          errorClass,
+          label: "配置阻塞",
+          tone: "bad",
+          subtitle: configText,
+        };
+      }
+      if (outcomeState === "failed_business") {
+        return {
+          outcomeState,
+          errorClass,
+          label: "业务失败",
+          tone: "bad",
+          subtitle: "业务处理失败，本条未进入成功摘要主位",
+        };
+      }
+      if (outcomeState === "recovered_notice") {
+        return {
+          outcomeState,
+          errorClass,
+          label: "恢复通知",
+          tone: "muted",
+          subtitle: "系统恢复摘要，不占业务摘要主位",
+        };
+      }
+      return null;
+    }
+
     function getRunDisplayState(run, detail) {
       const detailRun = detail && detail.full && detail.full.run && typeof detail.full.run === "object"
         ? detail.full.run
@@ -1162,8 +1454,10 @@
       const preferDetail = detailRun ? shouldPreferDetailSnapshot(run, detailRun, detail) : false;
       const runInterrupted = isRunInterruptedByUser(run);
       const detailInterrupted = isRunInterruptedByUser(detailRun);
+      const outcomeState = getRunOutcomeState(run, detail);
       // 同一个 run 一旦 detail 已进入终态，就不允许后续乱序/滞后的 working 摘要再把它压回处理中。
-      if (detailInterrupted) return "interrupted";
+      if (detailInterrupted || outcomeState === "interrupted_infra" || outcomeState === "interrupted_user") return "interrupted";
+      if (outcomeState === "failed_config" || outcomeState === "failed_business") return "error";
       if (detailState === "done" || detailState === "error") return detailState;
       if (isWorkingLikeState(detailState) && preferDetail) return detailState;
       if (isWorkingLikeState(runState)) return runState;
@@ -1270,12 +1564,14 @@
       return t.endsWith("...") || t.endsWith("…");
     }
 
-    function runStateClass(st) {
+    function runStateClass(st, opts = {}) {
       const s = String(st || "").toLowerCase();
+      const outcomeState = normalizeRunOutcomeState(opts && opts.outcomeState, "");
       if (s === "running") return "running";
       if (s === "queued") return "queued";
       if (s === "retry_waiting") return "retry-waiting";
       if (s === "external_busy") return "queued";
+      if (s === "interrupted" && outcomeState === "interrupted_infra") return "queued";
       if (s === "done") return "done";
       if (s === "interrupted") return "error";
       if (s === "error") return "error";
@@ -1284,13 +1580,18 @@
 
     function runStateHeadline(st, opts = {}) {
       const s = String(st || "").toLowerCase();
+      const outcomeState = normalizeRunOutcomeState(opts && opts.outcomeState, "");
       if (s === "running") return "进行中（实时执行）";
       if (s === "queued") return "排队中（等待执行）";
       if (s === "retry_waiting") return "等待重试中（网络中断）";
       if (s === "external_busy") return "外部占用（探测）";
+      if (s === "done" && outcomeState === "recovered_notice") return "恢复通知";
       if (s === "done") return "已完成";
+      if (s === "interrupted" && outcomeState === "interrupted_infra") return "环境中断";
       if (s === "interrupted") return "用户打断";
       if (s === "error" && opts && opts.timeout) return "执行超时";
+      if (s === "error" && outcomeState === "failed_config") return "配置阻塞";
+      if (s === "error" && outcomeState === "failed_business") return "业务失败";
       if (s === "error") return "执行异常";
       return "空闲";
     }
@@ -1308,8 +1609,10 @@
       const full = detail && detail.full ? detail.full : null;
       const runFromDetail = (full && full.run && typeof full.run === "object") ? full.run : {};
       const st = getRunDisplayState(run, detail);
-      if (st !== "retry_waiting" && st !== "error") return false;
+      const outcomeState = getRunOutcomeState(run, detail);
+      if (st !== "retry_waiting" && st !== "error" && !(st === "interrupted" && outcomeState === "interrupted_infra")) return false;
       if (st === "error" && isRunTimeoutLike(run, detail)) return true;
+      if (outcomeState === "interrupted_infra") return true;
       const samples = [
         run.error,
         run.errorHint,
@@ -1483,8 +1786,8 @@
       const rid = String(runId || "");
       if (!rid) return { expanded: false, manual: false };
       let state = PCONV.processUi[rid];
-      const s = String(st || "").toLowerCase();
-      const autoExpanded = s === "running" || s === "queued";
+      const status = String(st || "").trim().toLowerCase();
+      const autoExpanded = status === "running" || status === "queued" || status === "retry_waiting";
       if (!state) {
         state = { expanded: autoExpanded, manual: false };
         PCONV.processUi[rid] = state;
@@ -1918,7 +2221,7 @@
       if (!m || typeof m.index !== "number") return "";
       p = p.slice(0, m.index + m[0].length);
       const low = p.toLowerCase();
-      if (low.endsWith("/skill.md") || low.includes("/.codex/skills/")) return "";
+      if (low.endsWith("/skill.md") || /\/\.[^/]+\/skills\//.test(low)) return "";
       if (!BUSINESS_PATH_SEGMENTS.some((seg) => p.includes(seg))) return "";
       return p;
     }

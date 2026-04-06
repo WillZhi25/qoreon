@@ -38,10 +38,11 @@
       </div>
       <div class="header-nav" id="headerNav">
         <div class="header-mode-tabs" role="tablist" aria-label="一级页面切换">
-          <button class="header-mode-btn active" id="headerPanelChannelBtn" data-panel-mode="channel" role="tab" aria-selected="true">通道</button>
           <button class="header-mode-btn" id="headerPanelConvBtn" data-panel-mode="conv" role="tab" aria-selected="false">对话</button>
-          <button class="header-mode-btn is-disabled" id="headerPanelTaskBtn" type="button" role="tab" disabled aria-disabled="true" title="任务板块正在改版中，暂未开放">
-            <span>任务</span>
+          <button class="header-mode-btn" id="headerPanelTaskBtn" data-panel-mode="task" role="tab" aria-selected="false">任务</button>
+          <button class="header-mode-btn active" id="headerPanelChannelBtn" data-panel-mode="channel" role="tab" aria-selected="true">知识</button>
+          <button class="header-mode-btn is-disabled" id="headerPanelArchPreviewBtn" type="button" role="tab" aria-selected="false" aria-disabled="true" disabled title="架构板块敬请期待">
+            <span>架构</span>
             <span class="header-mode-soon">敬请期待</span>
           </button>
         </div>
@@ -65,7 +66,7 @@
               <path d="M4 7h16M7 12h10M10 17h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
             </svg>
             <span>系统设置</span>
-            <span class="system-settings-count">5项</span>
+            <span class="system-settings-count">6项</span>
           </button>
           <div class="system-settings-popover" id="systemSettingsPopover" role="menu" aria-label="系统设置">
             <button class="system-settings-item project-config-btn" id="projectConfigBtn" type="button" title="打开 项目配置">
@@ -88,6 +89,16 @@
                 <span class="system-settings-item-desc">跨通道消息流与处理轨迹</span>
               </div>
               <span class="system-settings-badge">时间线</span>
+            </button>
+            <button class="system-settings-item" id="projectRelationshipBoardBtn" type="button" title="打开 组织战略">
+              <div class="system-settings-item-main">
+                <div class="system-settings-item-heading">
+                  <span class="system-settings-item-title">组织战略</span>
+                  <span class="system-settings-item-new">NEW</span>
+                </div>
+                <span class="system-settings-item-desc">项目内组织结构与协作关系</span>
+              </div>
+              <span class="system-settings-badge">组织</span>
             </button>
             <button class="system-settings-item" id="sessionHealthBtn" type="button" title="打开 会话健康看板">
               <div class="system-settings-item-main">
@@ -121,10 +132,11 @@
     <!-- 移动端模式切换栏 -->
     <div class="mobile-mode-bar" id="mobileModeBar">
       <div class="pmseg" role="tablist" aria-label="移动端模式切换">
-        <button class="segbtn active" id="panelChannelBtnMobile" data-panel-mode="channel" role="tab">通道</button>
         <button class="segbtn" id="panelConvBtnMobile" data-panel-mode="conv" role="tab">对话</button>
-        <button class="segbtn segbtn-disabled" id="panelTaskBtnMobile" type="button" role="tab" disabled aria-disabled="true">
-          <span>任务</span>
+        <button class="segbtn" id="panelTaskBtnMobile" data-panel-mode="task" role="tab">任务</button>
+        <button class="segbtn active" id="panelChannelBtnMobile" data-panel-mode="channel" role="tab">知识</button>
+        <button class="segbtn segbtn-disabled" id="panelArchPreviewBtnMobile" type="button" role="tab" aria-disabled="true" disabled title="架构板块敬请期待">
+          <span>架构</span>
           <span class="segbtn-note">敬请期待</span>
         </button>
       </div>
@@ -163,25 +175,22 @@
           <div class="asideh">
             <div class="asideleft">
               <div class="pmseg" role="tablist" aria-label="页面维度切换" hidden aria-hidden="true">
-                <button class="segbtn active" id="panelChannelBtn" data-panel-mode="channel" role="tab">通道</button>
-                <button class="segbtn" id="panelTaskBtn" data-panel-mode="task" role="tab">任务</button>
                 <button class="segbtn" id="panelConvBtn" data-panel-mode="conv" role="tab">对话</button>
+                <button class="segbtn" id="panelTaskBtn" data-panel-mode="task" role="tab">任务</button>
+                <button class="segbtn active" id="panelChannelBtn" data-panel-mode="channel" role="tab">知识</button>
                 <button class="segbtn" id="panelOrgBtn" data-panel-mode="org" role="tab">组织</button>
                 <button class="segbtn" id="panelArchBtn" data-panel-mode="arch" role="tab">架构</button>
               </div>
               <h2 class="at" id="asideTitle">通道</h2>
-              <div class="conv-layout-tabs" id="convLayoutTabs" style="display:none;" role="tablist" aria-label="对话列表展示模式">
-                <button class="conv-layout-tab active" id="convLayoutFlatBtn" type="button" data-conv-layout="flat" role="tab" aria-selected="true">对话</button>
-                <button class="conv-layout-tab" id="convLayoutChannelBtn" type="button" data-conv-layout="channel" role="tab" aria-selected="false">通道块</button>
+              <div class="conv-layout-bar" id="convLayoutBar">
+                <div class="conv-layout-tabs" id="convLayoutTabs" role="tablist" aria-label="对话列表展示模式">
+                  <button class="conv-layout-tab active" id="convLayoutFlatBtn" type="button" data-conv-layout="flat" role="tab" aria-selected="true">对话</button>
+                  <button class="conv-layout-tab" id="convLayoutChannelBtn" type="button" data-conv-layout="channel" role="tab" aria-selected="false">通道块</button>
+                </div>
+                <div class="aside-actions">
+                  <button class="btn aside-text-btn" id="newChannelAsideBtn" type="button" title="新增通道">+通道</button>
+                </div>
               </div>
-            </div>
-            <div class="aside-actions">
-              <button class="btn icon-text-btn" id="newChannelAsideBtn" title="新增通道">
-                <svg viewBox="0 0 24 24" fill="none" width="14" height="14">
-                  <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-                </svg>
-                <span>通道</span>
-              </button>
             </div>
             <div class="am" id="asideMeta"></div>
           </div>
@@ -217,32 +226,10 @@
               <div class="channel-path-text" id="channelPathText" title="点击复制路径">-</div>
             </div>
           </div>
-          <button class="btn icon-text-btn mobile-new-conv-btn" id="newConvMobileBtn" title="新增对话">
-            <svg viewBox="0 0 24 24" fill="none" width="14" height="14">
-              <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-            </svg>
-            <span>对话</span>
-          </button>
           <div class="filterbar" id="filterBar"></div>
         </div>
-        <!-- 通道对话区块 -->
-        <div class="channel-conversations" id="channelConvBox">
-          <button class="conv-row-menu-btn chconv-manage-btn" id="channelConversationManageBtn" type="button" title="管理当前通道下的主子对话与删除状态" aria-label="通道对话管理">⋯</button>
-          <div class="chconv-header">
-            <span class="chconv-title">通道对话</span>
-            <div class="chconv-actions">
-              <button class="btn icon-text-btn" id="channelConvNewBtn" title="新增对话">
-                <svg viewBox="0 0 24 24" fill="none" width="14" height="14">
-                  <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-                </svg>
-                <span>对话</span>
-              </button>
-            </div>
-          </div>
-          <div class="chconv-list" id="channelConvList"></div>
-        </div>
         <div class="task-materials-header" id="taskMaterialsHeader">
-          <span class="task-materials-title">任务资料</span>
+          <span class="task-materials-title">文件资料</span>
         </div>
         <div class="filelist" id="fileList"></div>
         <!-- 通道知识沉淀区块 -->
@@ -300,6 +287,19 @@
               </svg>
               <span class="memo-count-dot memo" id="detailMemoCountDot" style="display:none;">0</span>
             </button>
+            <button class="btn icon-text-btn" id="detailTaskTrackingBtn" title="查看当前会话任务" style="display:none;">
+              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" width="14" height="14">
+                <path d="M6 6.5h12" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+                <path d="M6 11.5h8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+                <path d="M6 16.5h6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+                <path d="M17.4 15.8 19.6 18l-4.1 4-2.1-2.2 4-4Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+              </svg>
+              <span class="detail-task-counts">
+                <span class="detail-task-count detail-task-count-todo" id="detailTaskTrackingTodo">0</span>
+                <span class="detail-task-count-sep">/</span>
+                <span class="detail-task-count detail-task-count-progress" id="detailTaskTrackingProgress">0</span>
+              </span>
+            </button>
             <button class="btn icon-text-btn" id="detailTaskPushBtn" title="协作派发" style="display:none;">
               <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" width="14" height="14">
                 <path d="M5 12h10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
@@ -315,6 +315,36 @@
               <span>排期</span>
             </button>
           </div>
+        </div>
+        <div class="convcurrenttaskdock" id="convCurrentTaskDock" style="display:none;">
+          <div class="convcurrenttaskrow" id="convCurrentTaskRow">
+            <button class="convcurrenttaskstrip" id="convCurrentTaskStrip" type="button">
+              <span class="convcurrenttaskstrip-label">当前任务</span>
+              <span class="convcurrenttaskstrip-main">
+                <span class="convcurrenttaskstrip-title" id="convCurrentTaskStripTitle"></span>
+                <span class="convcurrenttaskstrip-summary" id="convCurrentTaskStripSummary"></span>
+              </span>
+              <span class="convcurrenttaskstrip-meta">
+                <span class="convcurrenttaskstrip-status" id="convCurrentTaskStripStatus"></span>
+                <span class="convcurrenttaskstrip-updated" id="convCurrentTaskStripUpdated"></span>
+                <span class="convcurrenttaskstrip-arrow" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" width="14" height="14">
+                    <path d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                </span>
+              </span>
+            </button>
+            <button class="convcurrenttaskstrip-close" id="convCurrentTaskStripClose" type="button" aria-label="收起当前任务横条" title="收起当前任务横条">
+              <svg viewBox="0 0 24 24" fill="none" width="14" height="14">
+                <path d="M7 14l5-5 5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+          </div>
+          <button class="convcurrenttaskpeek" id="convCurrentTaskPeek" type="button" aria-label="展开当前任务横条" title="展开当前任务横条" style="display:none;">
+            <svg viewBox="0 0 24 24" fill="none" width="14" height="14">
+              <path d="M7 10l5 5 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
         </div>
         <div class="detailb">
           <div class="chips" id="detailMeta" style="justify-content:flex-start;"></div>
@@ -362,7 +392,7 @@
                     <span class="convtraining-title">Agent培训</span>
                     <span class="convtraining-count" id="convTrainingCount">再 1 条消息后自动消失</span>
                   </div>
-                  <div class="convtraining-desc" id="convTrainingDesc">新 Agent 开始协作前，先查看所在通道资料，学习公共 skills、发消息方式与回执规则，并完成一次通讯录初始化验证。</div>
+                  <div class="convtraining-desc" id="convTrainingDesc">新 Agent 开始协作前，先学习项目 skills、发消息方式与回执规则，并完成一次通讯录正式发送验证。</div>
                 </div>
                 <div class="convtraining-actions">
                   <button class="btn primary convtraining-send" id="convTrainingSendBtn" type="button">发送培训</button>
@@ -371,12 +401,39 @@
               </div>
             </div>
             <div class="convcomposer">
+              <div class="convstartuphint" id="convStartupHint" style="display:none;">
+                <div class="convstartuphint-head">
+                  <div class="convstartuphint-titlewrap">
+                    <span class="convstartuphint-title" id="convStartupHintTitle">继续扩建团队并完成初始化</span>
+                    <span class="convstartuphint-state" id="convStartupHintState">建议动作</span>
+                  </div>
+                  <button class="convstartuphint-close" id="convStartupHintCloseBtn" type="button" aria-label="关闭项目初始化提醒" title="关闭">×</button>
+                </div>
+                <div class="convstartuphint-desc" id="convStartupHintDesc">当前项目已完成基础安装，发送下方提示词后，当前 Agent 会按标准模板继续扩团队、补培训并生成启动回执。</div>
+                <div class="convstartuphint-prompt" id="convStartupHintPrompt"></div>
+                <div class="convstartuphint-actions" id="convStartupHintActions">
+                  <button class="btn" id="convStartupHintCopyBtn" type="button">复制提示词</button>
+                  <button class="btn primary" id="convStartupHintSendBtn" type="button">发送给当前 Agent</button>
+                </div>
+              </div>
               <div class="convsenderrow" id="convSenderRow">
                 <div class="convsendermeta">
                   <div class="convsenderhint" id="convSenderHint"></div>
                   <div class="convhint" id="convHint">在该会话下继续发送消息，系统会按 5 秒频率自动刷新处理状态。</div>
                 </div>
                 <div class="convsenderactions">
+                  <button class="convinit-reminder-toggle" id="convTrainingReopenBtn" type="button" title="重新打开Agent培训提醒" aria-label="重新打开Agent培训提醒" aria-pressed="false">
+                    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                      <path d="M4 8.8 12 5l8 3.8-8 3.8L4 8.8Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+                      <path d="M7 11.4V15c0 .9 2 2.4 5 2.4s5-1.5 5-2.4v-3.6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+                    </svg>
+                  </button>
+                  <button class="convinit-reminder-toggle" id="convStartupHintReopenBtn" type="button" title="重新打开项目初始化提醒" aria-label="重新打开项目初始化提醒" aria-pressed="false">
+                    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                      <path d="M12 3.8v4.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+                      <path d="m12 19.8 1.8-3.6 4.1-.6-3-2.9.7-4.1-3.6 1.9-3.6-1.9.7 4.1-3 2.9 4.1.6 1.8 3.6Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+                    </svg>
+                  </button>
                   <button class="convrecentagents-global-toggle active" id="convRecentAgentsGlobalToggle" type="button" title="已显示最近联系，点击隐藏" aria-label="隐藏最近联系" aria-pressed="true">
                     <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
                       <path d="M8 11.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4Z" stroke="currentColor" stroke-width="1.6"/>
@@ -384,6 +441,7 @@
                       <path d="M4.5 18.2c.6-2.4 2.6-3.9 5.1-3.9s4.4 1.5 5 3.9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
                       <path d="M14.4 17.1c.4-1.6 1.8-2.6 3.4-2.6 1 0 1.9.4 2.5 1.2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" opacity="0.72"/>
                     </svg>
+                    <span class="convrecentagents-global-toggle-count" aria-hidden="true" hidden></span>
                   </button>
                   <button class="conv-enter-send-toggle active" id="convEnterSendToggle" type="button" title="已启用回车发送，点击关闭" aria-label="关闭回车发送" aria-pressed="true">
                     <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -465,6 +523,20 @@
     </aside>
   </div>
 
+  <div class="memo-drawer-mask conv-task-drawer-mask" id="convTaskDrawerMask" role="dialog" aria-modal="true" aria-label="会话任务抽屉">
+    <aside class="memo-drawer conv-task-drawer" role="document">
+      <div class="memo-drawer-head">
+        <div>
+          <div class="memo-drawer-title">会话任务</div>
+          <div class="memo-drawer-sub" id="convTaskDrawerSub">当前会话暂无任务跟踪</div>
+        </div>
+        <button class="btn" id="convTaskCloseBtn" type="button">关闭</button>
+      </div>
+      <div class="hint memo-drawer-hint conv-task-drawer-hint" id="convTaskHint">这里会展示当前任务、相关任务，以及每条任务最近的一次活动。</div>
+      <div class="memo-drawer-list conv-task-drawer-list" id="convTaskDrawerList"></div>
+    </aside>
+  </div>
+
   <!-- 全局协作消息派发弹窗 -->
   <div class="bmask" id="taskPushMask" role="dialog" aria-modal="true" aria-label="协作消息派发">
     <div class="bmodal task-push-modal" role="document">
@@ -526,16 +598,16 @@
           <button class="newconv-mode-btn active" id="newConvModeCreate" data-mode="create" type="button">新建对话</button>
           <button class="newconv-mode-btn" id="newConvModeAttach" data-mode="attach" type="button">添加已有对话</button>
         </div>
-        <div style="display:grid; gap:12px;">
-          <div style="display:grid; gap:6px;">
+        <div class="newconv-fields">
+          <div class="newconv-field">
             <label for="newConvProject">项目</label>
             <select class="input" id="newConvProject" style="cursor:pointer;"></select>
           </div>
-          <div style="display:grid; gap:6px;">
+          <div class="newconv-field">
             <label for="newConvChannel">通道</label>
             <select class="input" id="newConvChannel" style="cursor:pointer;"></select>
           </div>
-          <div style="display:grid; gap:6px;">
+          <div class="newconv-field">
             <label for="newConvCliType">CLI 类型</label>
             <select class="input" id="newConvCliType" style="cursor:pointer;">
               <option value="codex">Codex CLI</option>
@@ -544,51 +616,72 @@
               <option value="gemini">Gemini CLI</option>
             </select>
           </div>
-          <div style="display:grid; gap:6px;">
-            <label for="newConvModel">模型（可选）</label>
-            <input class="input" id="newConvModel" placeholder="留空使用该 CLI 默认模型" />
+          <div class="newconv-field">
+            <label for="newConvAlias">对话agent名称（alias，可选）</label>
+            <input class="input" id="newConvAlias" placeholder="例如：服务开发-通讯能力" />
           </div>
-          <div style="display:grid; gap:6px;">
-            <label for="newConvPurpose">用途说明（可选）</label>
-            <input class="input" id="newConvPurpose" placeholder="例如：补位处理子级07关系图重构" />
-          </div>
-          <div style="display:grid; gap:6px;">
+          <div class="newconv-field">
             <label for="newConvSessionRole">会话角色</label>
             <select class="input" id="newConvSessionRole" style="cursor:pointer;">
               <option value="child">子会话</option>
               <option value="primary">主会话</option>
             </select>
           </div>
-          <div style="display:grid; gap:6px;">
-            <label for="newConvReuseStrategy">创建策略</label>
-            <select class="input" id="newConvReuseStrategy" style="cursor:pointer;">
-              <option value="create_new">总是新建</option>
-              <option value="reuse_active">优先复用同环境活跃会话</option>
-              <option value="rotate">新建并准备轮换</option>
-            </select>
-          </div>
-          <div style="display:grid; gap:6px;">
-            <label for="newConvEnvironment">环境</label>
-            <select class="input" id="newConvEnvironment" style="cursor:pointer;"></select>
-          </div>
-          <div style="display:grid; gap:6px;">
-            <label for="newConvWorktreeRoot">worktree 根目录</label>
-            <input class="input" id="newConvWorktreeRoot" placeholder="/abs/path/to/worktree" />
-          </div>
-          <div style="display:grid; gap:6px;">
-            <label for="newConvWorkdir">workdir</label>
-            <input class="input" id="newConvWorkdir" placeholder="/abs/path/to/workdir" />
-          </div>
-          <div style="display:grid; gap:6px;">
-            <label for="newConvBranch">branch</label>
-            <input class="input" id="newConvBranch" placeholder="release/... 或 refactor/..." />
-          </div>
-          <div id="newConvSessionRow" style="display:none; gap:6px;">
+          <section class="newconv-advanced" id="newConvAdvancedSection">
+            <button
+              class="newconv-advanced-toggle"
+              id="newConvAdvancedToggle"
+              type="button"
+              aria-expanded="false"
+              aria-controls="newConvAdvancedBody"
+            >
+              <span class="newconv-advanced-copy">
+                <span class="newconv-advanced-title">高级配置</span>
+                <span class="newconv-advanced-summary" id="newConvAdvancedSummary">默认：总是新建 / stable</span>
+              </span>
+              <span class="newconv-advanced-caret" aria-hidden="true">▾</span>
+            </button>
+            <div class="newconv-advanced-body" id="newConvAdvancedBody" hidden>
+              <div class="newconv-field">
+                <label for="newConvModel">模型（可选）</label>
+                <input class="input" id="newConvModel" placeholder="留空使用该 CLI 默认模型" />
+              </div>
+              <div class="newconv-field">
+                <label for="newConvPurpose">用途说明（可选）</label>
+                <input class="input" id="newConvPurpose" placeholder="例如：补位处理子级07关系图重构" />
+              </div>
+              <div class="newconv-field">
+                <label for="newConvReuseStrategy">创建策略</label>
+                <select class="input" id="newConvReuseStrategy" style="cursor:pointer;">
+                  <option value="create_new">总是新建</option>
+                  <option value="reuse_active">优先复用同环境活跃会话</option>
+                  <option value="rotate">新建并准备轮换</option>
+                </select>
+              </div>
+              <div class="newconv-field">
+                <label for="newConvEnvironment">环境</label>
+                <select class="input" id="newConvEnvironment" style="cursor:pointer;"></select>
+              </div>
+              <div class="newconv-field">
+                <label for="newConvWorktreeRoot">worktree 根目录</label>
+                <input class="input" id="newConvWorktreeRoot" placeholder="/abs/path/to/worktree" />
+              </div>
+              <div class="newconv-field">
+                <label for="newConvWorkdir">workdir</label>
+                <input class="input" id="newConvWorkdir" placeholder="/abs/path/to/workdir" />
+              </div>
+              <div class="newconv-field">
+                <label for="newConvBranch">branch</label>
+                <input class="input" id="newConvBranch" placeholder="release/... 或 refactor/..." />
+              </div>
+            </div>
+          </section>
+          <div class="newconv-field" id="newConvSessionRow" style="display:none;">
             <label for="newConvSessionId">Session ID</label>
             <input class="input" id="newConvSessionId" placeholder="例如：019bde9b-4793-70e0-b18a-a437279b2d18 或 ses_abc123..." />
             <div class="hint" style="margin-top:0;">输入已有会话 ID，系统会直接绑定到当前项目通道。</div>
           </div>
-          <div id="newConvInitRow" style="display:grid; gap:6px;">
+          <div class="newconv-field" id="newConvInitRow" style="display:grid;">
             <label for="newConvInitMessage">创建后自动发送消息（可编辑）</label>
             <textarea class="input nctextarea" id="newConvInitMessage" placeholder="请输入创建后需要自动发送的首条消息"></textarea>
             <div class="hint" style="margin-top:0;">仅在“新建对话”模式生效；“添加已有对话”模式不自动发送。</div>
@@ -691,25 +784,30 @@
           </div>
           <div class="ncgrid ncgrid-2">
             <div class="ncfield">
-              <label for="newChannelKind">通道类型 <span style="color:var(--bad);">*</span></label>
-              <select class="input" id="newChannelKind">
-                <option value="子级">子级</option>
+              <label for="newChannelKind">通道类型（推荐） <span style="color:var(--bad);">*</span></label>
+              <select class="input" id="newChannelKind" onchange="handleNewChannelFormFieldChange()">
+                <option value="业务">业务</option>
                 <option value="辅助">辅助</option>
                 <option value="主体">主体</option>
+                <option value="__custom__">其他（自定义）</option>
               </select>
             </div>
             <div class="ncfield">
               <label for="newChannelIndex">通道编号 <span style="color:var(--bad);">*</span></label>
-              <input class="input" id="newChannelIndex" placeholder="例如：04 / A03" />
+              <input class="input" id="newChannelIndex" placeholder="例如：04 / A03" oninput="handleNewChannelFormFieldChange()" />
             </div>
+          </div>
+          <div class="ncfield new-channel-kind-custom" id="newChannelKindCustomWrap" style="display:none;">
+            <label for="newChannelKindCustom">自定义类型名称 <span style="color:var(--bad);">*</span></label>
+            <input class="input" id="newChannelKindCustom" placeholder="例如：产品 / 设计 / 运营 / 数据" oninput="handleNewChannelFormFieldChange()" />
           </div>
           <div class="ncfield">
             <label for="newChannelName">业务主题 <span style="color:var(--bad);">*</span></label>
-            <input class="input" id="newChannelName" placeholder="例如：前端体验（task-overview 页面交互）" />
+            <input class="input" id="newChannelName" placeholder="例如：前端体验（task-overview 页面交互）" oninput="handleNewChannelFormFieldChange()" />
           </div>
           <div class="ncfield">
             <label for="newChannelDesc">通道说明（可选）</label>
-            <textarea class="input nctextarea" id="newChannelDesc" placeholder="补充通道用途、边界或命名说明"></textarea>
+            <textarea class="input nctextarea" id="newChannelDesc" placeholder="补充通道用途、边界或命名说明" oninput="handleNewChannelFormFieldChange()"></textarea>
           </div>
         </section>
 
@@ -765,7 +863,7 @@
                 <div class="new-channel-section-desc">只保留这一条输入，尽量把边界、目标和例外说清楚。</div>
               </div>
             </div>
-            <textarea class="input nctextarea new-channel-requirement" id="newChannelRequirement" placeholder="例如：我想新增一个通道，只保留空通道框架创建，不要创建主任务或主对话；Agent 辅助时先整理命名、范围和基础目录，再回传结果。"></textarea>
+            <textarea class="input nctextarea new-channel-requirement" id="newChannelRequirement" placeholder="例如：我想新增一个通道，只保留空通道框架创建，不要创建主任务或主对话；Agent 辅助时先整理命名、范围和基础目录，再回传结果。" oninput="handleNewChannelFormFieldChange()"></textarea>
           </div>
         </section>
 

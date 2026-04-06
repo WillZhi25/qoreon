@@ -20,9 +20,113 @@
       };
     }
 
+    function normalizeSessionHealthState(raw, fallback = "") {
+      const s = String(raw || "").trim().toLowerCase();
+      if (s === "healthy" || s === "busy" || s === "blocked" || s === "recovering" || s === "attention") {
+        return s;
+      }
+      return String(fallback || "").trim().toLowerCase();
+    }
+
+    function normalizeRunOutcomeState(raw, fallback = "") {
+      const s = String(raw || "").trim().toLowerCase();
+      if (
+        s === "success"
+        || s === "interrupted_infra"
+        || s === "interrupted_user"
+        || s === "failed_config"
+        || s === "failed_business"
+        || s === "recovered_notice"
+      ) {
+        return s;
+      }
+      return String(fallback || "").trim().toLowerCase();
+    }
+
+    function normalizeRunErrorClass(raw, fallback = "") {
+      const s = String(raw || "").trim().toLowerCase();
+      if (
+        s === "infra_restart"
+        || s === "infra_restart_recovered"
+        || s === "session_binding"
+        || s === "workspace_permission"
+        || s === "cli_path"
+      ) {
+        return s;
+      }
+      return String(fallback || "").trim().toLowerCase();
+    }
+
+    function normalizeLatestEffectiveRunSummary(raw) {
+      const src = (raw && typeof raw === "object") ? raw : {};
+      return {
+        run_id: String(firstNonEmptyText([src.run_id, src.runId]) || "").trim(),
+        outcome_state: normalizeRunOutcomeState(firstNonEmptyText([src.outcome_state, src.outcomeState]), ""),
+        preview: String(firstNonEmptyText([src.preview, src.last_preview, src.lastPreview]) || "").trim(),
+        created_at: String(firstNonEmptyText([src.created_at, src.createdAt, src.updated_at, src.updatedAt]) || "").trim(),
+      };
+    }
+
     function getSessionLatestRunSummary(session) {
       const s = (session && typeof session === "object") ? session : {};
       return normalizeLatestRunSummary(s.latest_run_summary || s.latestRunSummary || null);
+    }
+
+    function getSessionHealthState(session) {
+      const s = (session && typeof session === "object") ? session : {};
+      return normalizeSessionHealthState(
+        firstNonEmptyText([s.session_health_state, s.sessionHealthState]),
+        ""
+      );
+    }
+
+    function getSessionLatestEffectiveRunSummary(session) {
+      const s = (session && typeof session === "object") ? session : {};
+      return normalizeLatestEffectiveRunSummary(
+        s.latest_effective_run_summary || s.latestEffectiveRunSummary || null
+      );
+    }
+
+    function getSessionPrimaryPreviewText(session) {
+      const s = (session && typeof session === "object") ? session : {};
+      const latestEffectiveRunSummary = getSessionLatestEffectiveRunSummary(s);
+      const latestRunSummary = getSessionLatestRunSummary(s);
+      const displayState = normalizeSessionDisplayState(getSessionDisplayState(s), "idle");
+      const isActiveLike = (
+        displayState === "running"
+        || displayState === "queued"
+        || displayState === "retry_waiting"
+        || displayState === "external_busy"
+      );
+      if (isActiveLike) {
+        return String(firstNonEmptyText([
+          latestRunSummary.preview,
+          s.lastPreview,
+          latestEffectiveRunSummary.preview,
+        ]) || "").trim();
+      }
+      return String(firstNonEmptyText([
+        latestEffectiveRunSummary.preview,
+        s.lastPreview,
+        latestRunSummary.preview,
+      ]) || "").trim();
+    }
+
+    function sessionUsesSyntheticPreviewSender(session, previewText = "") {
+      const s = (session && typeof session === "object") ? session : {};
+      const latestEffectiveRunSummary = getSessionLatestEffectiveRunSummary(s);
+      const latestRunSummary = getSessionLatestRunSummary(s);
+      const effectivePreview = String(latestEffectiveRunSummary.preview || "").trim();
+      const currentPreview = String(previewText || "").trim();
+      if (!effectivePreview) return false;
+      if (currentPreview && currentPreview !== effectivePreview) return false;
+      const effectiveRunId = String(latestEffectiveRunSummary.run_id || "").trim();
+      const latestRunId = String(latestRunSummary.run_id || "").trim();
+      const latestSenderType = String(latestRunSummary.sender_type || "").trim().toLowerCase();
+      return (
+        (effectiveRunId && latestRunId && effectiveRunId !== latestRunId)
+        || latestSenderType === "system"
+      );
     }
 
     function getSessionDisplayState(session) {
@@ -35,6 +139,9 @@
       const rawState = normalizeSessionDisplayState(raw, "");
       const runtimeDisplay = normalizeSessionDisplayState(runtimeState.display_state, "idle");
       const latestRunSummary = getSessionLatestRunSummary(s);
+      const sessionHealthState = getSessionHealthState(s);
+      const latestEffectiveRunSummary = getSessionLatestEffectiveRunSummary(s);
+      const latestEffectiveOutcomeState = normalizeRunOutcomeState(latestEffectiveRunSummary.outcome_state, "");
       const latestStatus = normalizeSessionDisplayState(latestRunSummary.status, "");
       const isActiveLike = (one) => (
         one === "running"
@@ -45,6 +152,20 @@
 
       // 运行时显式态优先，避免旧的 session_display_state 把已恢复/已中断会话继续显示成处理中。
       if (runtimeDisplay === "error" || isActiveLike(runtimeDisplay)) return runtimeDisplay;
+      if (sessionHealthState === "busy") {
+        if (isActiveLike(latestStatus)) return latestStatus;
+        return "running";
+      }
+      if (sessionHealthState === "recovering") return "retry_waiting";
+      if (sessionHealthState === "blocked") return "error";
+      if (sessionHealthState === "attention") {
+        if (latestEffectiveOutcomeState === "interrupted_infra" || latestEffectiveOutcomeState === "interrupted_user") {
+          return "interrupted";
+        }
+        if (latestEffectiveOutcomeState === "failed_config" || latestEffectiveOutcomeState === "failed_business") {
+          return "error";
+        }
+      }
 
       if (isExplicitIdleRuntimeState(runtimeState)) {
         if (isActiveLike(rawState)) {

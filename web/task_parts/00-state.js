@@ -41,10 +41,11 @@
       view: "work",          // work | comms
       panelMode: "channel",  // channel | task | conv | org | arch
       selectedPath: "",
+      selectedTaskId: "",
       selectedSessionId: "",
       selectedSessionExplicit: false, // true=用户显式选择会话；false=系统默认路由
       convSort: "time_desc",
-      convListLayout: "flat",
+      convListLayout: "channel",
       itemSort: "time_desc",
       taskModule: "tasks",   // tasks | schedule | org
       taskLane: "全部",
@@ -59,6 +60,7 @@
     const CONV_MEMO_CONSUMED_KEY = "taskDashboard.convMemoConsumed.v1";
     const CONV_FILE_STARRED_KEY = "taskDashboard.convFileStarred.v1";
     const CONV_TRAINING_SENT_KEY = "taskDashboard.convTrainingSent.v1";
+    const CONV_LAST_SELECTION_KEY = "taskDashboard.convLastSelection.v1";
     const TASK_COMPLETED_VIEWED_KEY = "taskDashboard.taskCompletedViewed.v1";
     const ORG_MANUAL_RELATIONS_KEY = "taskDashboard.orgManualRelations.v1";
     const FEATURE_UNREAD_MONOTONIC_KEY = "__feature_unread_monotonic__";
@@ -76,6 +78,54 @@
     }
 
     const CHANNEL_KNOWLEDGE_COLLAPSED = loadChannelKnowledgeCollapsed();
+    const CONV_LAST_SELECTION_BY_SCOPE = loadConversationLastSelectionMap();
+
+    function loadConversationLastSelectionMap() {
+      try {
+        const raw = localStorage.getItem(CONV_LAST_SELECTION_KEY);
+        if (!raw) return Object.create(null);
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== "object") return Object.create(null);
+        return Object.assign(Object.create(null), parsed);
+      } catch (_) {}
+      return Object.create(null);
+    }
+
+    function conversationSelectionScopeKey(projectId, channelName) {
+      const pid = String(projectId || "").trim();
+      const ch = String(channelName || "").trim();
+      if (!pid) return "";
+      return pid + "::" + (ch || "*");
+    }
+
+    function persistConversationLastSelectionMap() {
+      try {
+        localStorage.setItem(CONV_LAST_SELECTION_KEY, JSON.stringify(CONV_LAST_SELECTION_BY_SCOPE));
+      } catch (_) {}
+    }
+
+    function rememberConversationSelection(projectId, channelName, sessionId) {
+      const pid = String(projectId || "").trim();
+      const key = conversationSelectionScopeKey(pid, channelName);
+      const projectKey = conversationSelectionScopeKey(pid, "");
+      const sid = String(sessionId || "").trim();
+      if (!pid || !sid) return;
+      if (key) CONV_LAST_SELECTION_BY_SCOPE[key] = sid;
+      if (projectKey) CONV_LAST_SELECTION_BY_SCOPE[projectKey] = sid;
+      persistConversationLastSelectionMap();
+    }
+
+    function readRememberedConversationSelection(projectId, channelName) {
+      const key = conversationSelectionScopeKey(projectId, channelName);
+      const projectKey = conversationSelectionScopeKey(projectId, "");
+      if (key && CONV_LAST_SELECTION_BY_SCOPE[key]) {
+        return String(CONV_LAST_SELECTION_BY_SCOPE[key] || "").trim();
+      }
+      if (projectKey) {
+        return String(CONV_LAST_SELECTION_BY_SCOPE[projectKey] || "").trim();
+      }
+      return "";
+    }
 
     function channelKnowledgeKey(projectId, channelName) {
       return String(projectId || "") + "::" + String(channelName || "");

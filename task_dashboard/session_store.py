@@ -224,30 +224,63 @@ class SessionStore:
             session["project_id"] = project_id
         return sessions
 
-    def get_session(self, session_id: str) -> dict[str, Any] | None:
+    def find_sessions(
+        self,
+        session_id: str,
+        *,
+        include_deleted: bool = True,
+        project_id: str = "",
+    ) -> list[dict[str, Any]]:
+        """
+        Find all matching session bindings for one session id.
+
+        Args:
+            session_id: The session identifier.
+            include_deleted: Whether deleted bindings should be included.
+            project_id: Optional project scope to narrow the lookup.
+
+        Returns:
+            Matching normalized session rows with `project_id` attached.
+        """
+        sid = str(session_id or "").strip()
+        if not sid:
+            return []
+        project_ids = [str(project_id).strip()] if str(project_id or "").strip() else self.list_all_projects()
+        out: list[dict[str, Any]] = []
+        for pid in project_ids:
+            try:
+                data = self._load_project_data(pid)
+            except Exception:
+                continue
+            effective_project_id = str(data.get("project_id") or pid).strip() or pid
+            for session in data.get("sessions", []):
+                if not isinstance(session, dict):
+                    continue
+                if str(session.get("id") or "").strip() != sid:
+                    continue
+                row = self._normalize_session_record(session)
+                if not include_deleted and bool(row.get("is_deleted")):
+                    continue
+                row["project_id"] = effective_project_id
+                out.append(row)
+        return out
+
+    def get_session(self, session_id: str, *, project_id: str = "") -> dict[str, Any] | None:
         """
         Get a single session by its ID.
 
         Args:
-            session_id: The session identifier (UUID).
+            session_id: The session identifier.
+            project_id: Optional project scope to avoid cross-project ambiguity.
 
         Returns:
             Session dictionary or None if not found.
         """
-        # Need to search across all project files
-        for path in self.sessions_dir.glob("*.json"):
-            try:
-                data = self._load_project_data(path.stem)
-                project_id = str(data.get("project_id") or path.stem)
-                sessions = data.get("sessions", [])
-                for session in sessions:
-                    if session.get("id") == session_id:
-                        out = self._normalize_session_record(session)
-                        out["project_id"] = project_id
-                        return out
-            except Exception:
-                continue
-        return None
+        matches = self.find_sessions(session_id, include_deleted=True, project_id=project_id)
+        if not matches:
+            return None
+        available = [row for row in matches if not bool(row.get("is_deleted"))]
+        return deepcopy(available[0] if available else matches[0])
 
     def create_session(
         self,
@@ -287,6 +320,12 @@ class SessionStore:
         """
         now = _utc_now_iso()
         sid = str(session_id or "").strip() or str(uuid.uuid4())
+        existing_matches = self.find_sessions(sid, include_deleted=True)
+        if existing_matches:
+            existing_projects = {str(item.get("project_id") or "").strip() for item in existing_matches if str(item.get("project_id") or "").strip()}
+            if any(pid != project_id for pid in existing_projects):
+                raise ValueError("session already belongs to another project")
+            raise ValueError("session already exists; use attach_existing_session")
         existing = self.list_sessions(project_id, channel_name, include_deleted=True)
         existing_active = [item for item in existing if not bool(item.get("is_deleted"))]
         effective_primary = is_primary if isinstance(is_primary, bool) else (not existing_active)
@@ -335,6 +374,12 @@ class SessionStore:
             data["sessions"] = normalized_sessions
         data["sessions"].append(session)
         self._save_project_data(project_id, data)
+        try:
+            from task_dashboard.runtime.session_routes import _invalidate_sessions_payload_cache
+
+            _invalidate_sessions_payload_cache(project_id)
+        except Exception:
+            pass
 
         return session
 
@@ -371,8 +416,9 @@ class SessionStore:
         sid = str(session_id or "").strip()
         if not sid:
             raise ValueError("missing session_id")
-        existing = self.get_session(sid)
-        if existing:
+        existing_matches = self.find_sessions(sid, include_deleted=True)
+        if existing_matches:
+            existing = deepcopy(existing_matches[0])
             existing_project_id = str(existing.get("project_id") or "").strip()
             if existing_project_id and existing_project_id != project_id:
                 raise ValueError("session already belongs to another project")
@@ -413,7 +459,7 @@ class SessionStore:
                 update_fields["is_primary"] = is_primary
             elif str(session_role or "").strip().lower() == "primary":
                 update_fields["is_primary"] = True
-            updated = self.update_session(sid, **update_fields)
+            updated = self.update_session(sid, project_id=project_id, **update_fields)
             if not updated:
                 raise LookupError("session not found")
             return updated, False
@@ -441,7 +487,7 @@ class SessionStore:
         )
         return created, True
 
-    def update_session(self, session_id: str, **kwargs) -> dict[str, Any] | None:
+    def update_session(self, session_id: str, *, project_id: str = "", **kwargs) -> dict[str, Any] | None:
         """
         Update session attributes.
 
@@ -452,10 +498,10 @@ class SessionStore:
         Returns:
             Updated session dictionary or None if not found.
         """
-        # Find the session and its project
-        for path in self.sessions_dir.glob("*.json"):
+        project_ids = [str(project_id).strip()] if str(project_id or "").strip() else self.list_all_projects()
+        for pid in project_ids:
             try:
-                data = json.loads(path.read_text(encoding="utf-8"))
+                data = self._load_project_data(pid)
                 sessions = data.get("sessions", [])
                 for i, session in enumerate(sessions):
                     if session.get("id") == session_id:
@@ -513,8 +559,14 @@ class SessionStore:
                         sessions[i] = session
                         data["sessions"] = sessions
                         self._save_project_data(data.get("project_id", ""), data)
+                        try:
+                            from task_dashboard.runtime.session_routes import _invalidate_sessions_payload_cache
+
+                            _invalidate_sessions_payload_cache(str(data.get("project_id") or pid))
+                        except Exception:
+                            pass
                         out = self._normalize_session_record(session)
-                        out["project_id"] = str(data.get("project_id") or path.stem)
+                        out["project_id"] = str(data.get("project_id") or pid)
                         return out
             except Exception:
                 continue
@@ -540,6 +592,12 @@ class SessionStore:
                 if len(sessions) < original_len:
                     data["sessions"] = sessions
                     self._save_project_data(data.get("project_id", ""), data)
+                    try:
+                        from task_dashboard.runtime.session_routes import _invalidate_sessions_payload_cache
+
+                        _invalidate_sessions_payload_cache(str(data.get("project_id") or path.stem))
+                    except Exception:
+                        pass
                     return True
             except Exception:
                 continue
@@ -675,7 +733,7 @@ class SessionStore:
             "count": len(out_sessions),
         }
 
-    def touch_session(self, session_id: str) -> bool:
+    def touch_session(self, session_id: str, *, project_id: str = "") -> bool:
         """
         Update the last_used_at timestamp for a session.
 
@@ -685,7 +743,7 @@ class SessionStore:
         Returns:
             True if updated, False if not found.
         """
-        result = self.update_session(session_id)
+        result = self.update_session(session_id, project_id=project_id)
         return result is not None
 
     def dedup_channel_sessions(

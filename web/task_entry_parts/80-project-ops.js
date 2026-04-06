@@ -1479,6 +1479,7 @@
         dailyTime: "09:30",
         weekdays: [1, 2, 3, 4, 5],
         busyPolicy: "run_on_next_idle",
+        maxExecuteCount: 0,
         contextScope: {
           recentTasksLimit: 10,
           recentRunsLimit: 10,
@@ -1492,6 +1493,27 @@
       };
     }
 
+    function heartbeatTaskFieldPresent(raw, keys = []) {
+      const row = (raw && typeof raw === "object") ? raw : {};
+      const list = Array.isArray(keys) ? keys : [];
+      return list.some((key) => Object.prototype.hasOwnProperty.call(row, key));
+    }
+
+    function heartbeatOptionalNonNegativeNumber(raw, keys = [], opts = {}) {
+      const row = (raw && typeof raw === "object") ? raw : {};
+      const list = Array.isArray(keys) ? keys : [];
+      const emptyAsZero = !!opts.emptyAsZero;
+      for (const key of list) {
+        if (!Object.prototype.hasOwnProperty.call(row, key)) continue;
+        const value = row[key];
+        if (value == null || String(value).trim() === "") return emptyAsZero ? 0 : null;
+        const num = Number(value);
+        if (!Number.isFinite(num)) return emptyAsZero ? 0 : null;
+        return Math.max(0, Math.round(num));
+      }
+      return null;
+    }
+
     function normalizeHeartbeatTaskClient(raw, projectId, defaults = {}) {
       const row = (raw && typeof raw === "object") ? raw : {};
       const base = (defaults && typeof defaults === "object") ? defaults : {};
@@ -1502,6 +1524,41 @@
       const scheduleType = firstNonEmptyText([row.schedule_type, row.scheduleType, base.scheduleType]).toLowerCase();
       const busyPolicy = firstNonEmptyText([row.busy_policy, row.busyPolicy, base.busyPolicy]).toLowerCase();
       const weekdays = normalizeHeartbeatWeekdaysClient(row.weekdays || row.weekDays || base.weekdays);
+      const hasMaxExecuteCount = heartbeatTaskFieldPresent(row, ["max_execute_count", "maxExecuteCount"])
+        || heartbeatTaskFieldPresent(base, ["max_execute_count", "maxExecuteCount", "maxExecuteCount"]);
+      const hasExecutedCount = heartbeatTaskFieldPresent(row, ["executed_count", "executedCount"])
+        || heartbeatTaskFieldPresent(base, ["executed_count", "executedCount", "executedCount"]);
+      const hasRemainingExecuteCount = heartbeatTaskFieldPresent(row, ["remaining_execute_count", "remainingExecuteCount"])
+        || heartbeatTaskFieldPresent(base, ["remaining_execute_count", "remainingExecuteCount", "remainingExecuteCount"]);
+      const maxExecuteCount = hasMaxExecuteCount
+        ? (heartbeatOptionalNonNegativeNumber(row, ["max_execute_count", "maxExecuteCount"], { emptyAsZero: true })
+          ?? heartbeatOptionalNonNegativeNumber(base, ["max_execute_count", "maxExecuteCount", "maxExecuteCount"], { emptyAsZero: true }))
+        : null;
+      const executedCount = hasExecutedCount
+        ? (heartbeatOptionalNonNegativeNumber(row, ["executed_count", "executedCount"])
+          ?? heartbeatOptionalNonNegativeNumber(base, ["executed_count", "executedCount", "executedCount"]))
+        : null;
+      const remainingExecuteCount = hasRemainingExecuteCount
+        ? (heartbeatOptionalNonNegativeNumber(row, ["remaining_execute_count", "remainingExecuteCount"])
+          ?? heartbeatOptionalNonNegativeNumber(base, ["remaining_execute_count", "remainingExecuteCount", "remainingExecuteCount"]))
+        : null;
+      const lastCountedJobId = firstNonEmptyText([row.last_counted_job_id, row.lastCountedJobId, base.last_counted_job_id, base.lastCountedJobId]);
+      const autoDisabledReason = firstNonEmptyText([row.auto_disabled_reason, row.autoDisabledReason, base.auto_disabled_reason, base.autoDisabledReason]).toLowerCase();
+      const autoDisabledAt = firstNonEmptyText([row.auto_disabled_at, row.autoDisabledAt, base.auto_disabled_at, base.autoDisabledAt]);
+      const rawSourceScope = firstNonEmptyText([row.source_scope, row.sourceScope]).toLowerCase();
+      const inferredSessionId = firstNonEmptyText([row.session_id, row.sessionId, base.session_id, base.sessionId]).trim();
+      const sourceScope = rawSourceScope === "session"
+        ? "session"
+        : (rawSourceScope === "project" ? "project" : (inferredSessionId ? "session" : "project"));
+      const hasExecuteLimitMeta = !!(
+        _coerceBoolClient(row.has_execute_limit_meta ?? base.has_execute_limit_meta, false)
+        || hasMaxExecuteCount
+        || hasExecutedCount
+        || hasRemainingExecuteCount
+        || lastCountedJobId
+        || autoDisabledReason
+        || autoDisabledAt
+      );
       return {
         heartbeat_task_id: heartbeatTaskId,
         title: firstNonEmptyText([row.title, base.title]) || heartbeatTaskId || "心跳任务",
@@ -1553,7 +1610,14 @@
         pending_job: _coerceBoolClient(row.pending_job, false),
         history_count: Math.max(0, Number(firstNonEmptyText([row.history_count, row.historyCount]) || 0)),
         updated_at: firstNonEmptyText([row.updated_at, row.updatedAt]),
-        source_scope: firstNonEmptyText([row.source_scope, row.sourceScope]).toLowerCase() === "session" ? "session" : "project",
+        max_execute_count: maxExecuteCount,
+        executed_count: executedCount,
+        remaining_execute_count: remainingExecuteCount,
+        last_counted_job_id: lastCountedJobId,
+        auto_disabled_reason: autoDisabledReason,
+        auto_disabled_at: autoDisabledAt,
+        has_execute_limit_meta: hasExecuteLimitMeta,
+        source_scope: sourceScope,
         source: firstNonEmptyText([row.source, "heartbeat_tasks"]),
         project_id: String(projectId || "").trim(),
       };
@@ -1648,6 +1712,11 @@
       draft.dailyTime = String(row.daily_time || row.dailyTime || draft.dailyTime || "09:30").trim() || "09:30";
       draft.weekdays = normalizeHeartbeatWeekdaysClient(row.weekdays || row.weekDays || draft.weekdays);
       draft.busyPolicy = String(row.busy_policy || row.busyPolicy || draft.busyPolicy).trim() || "run_on_next_idle";
+      draft.maxExecuteCount = Math.max(0, Number(
+        heartbeatOptionalNonNegativeNumber(row, ["max_execute_count", "maxExecuteCount"], { emptyAsZero: true })
+        ?? draft.maxExecuteCount
+        ?? 0
+      ));
       draft.contextScope = {
         recentTasksLimit: Math.max(0, Number(row.context_scope && (row.context_scope.recent_tasks_limit ?? row.context_scope.recentTasksLimit) || draft.contextScope.recentTasksLimit || 10)),
         recentRunsLimit: Math.max(0, Number(row.context_scope && (row.context_scope.recent_runs_limit ?? row.context_scope.recentRunsLimit) || draft.contextScope.recentRunsLimit || 10)),
@@ -1681,6 +1750,8 @@
     }
 
     function heartbeatTaskStateLabel(task) {
+      const limitMeta = heartbeatTaskExecuteLimitMeta(task);
+      if (limitMeta.reached) return "已达上限自动关闭";
       const status = String((task && (task.last_status || task.last_job_status || task.last_result || task.result || task.status)) || "").trim().toLowerCase();
       return ({
         disabled: "已关闭",
@@ -1699,11 +1770,73 @@
     }
 
     function heartbeatTaskStateTone(task) {
+      const limitMeta = heartbeatTaskExecuteLimitMeta(task);
+      if (limitMeta.reached) return "warn";
       const status = String((task && (task.last_status || task.last_job_status || task.last_result || task.result || task.status)) || "").trim().toLowerCase();
       if (["error", "invalid_config"].includes(status)) return "bad";
       if (["dispatched", "scheduled", "created", "retry_waiting", "waiting_idle", "running"].includes(status)) return "warn";
       if (["disabled"].includes(status)) return "muted";
       return "good";
+    }
+
+    function heartbeatTaskExecuteLimitMeta(task) {
+      const row = (task && typeof task === "object") ? task : {};
+      const hasMeta = _coerceBoolClient(row.has_execute_limit_meta, false)
+        || row.max_execute_count != null
+        || row.executed_count != null
+        || row.remaining_execute_count != null
+        || String(row.auto_disabled_reason || "").trim()
+        || String(row.auto_disabled_at || "").trim();
+      const maxExecuteCount = Number.isFinite(Number(row.max_execute_count)) ? Math.max(0, Number(row.max_execute_count)) : null;
+      const executedCount = Number.isFinite(Number(row.executed_count)) ? Math.max(0, Number(row.executed_count)) : null;
+      const remainingExecuteCount = Number.isFinite(Number(row.remaining_execute_count)) ? Math.max(0, Number(row.remaining_execute_count)) : null;
+      const autoDisabledReason = String(row.auto_disabled_reason || "").trim().toLowerCase();
+      const autoDisabledAt = String(row.auto_disabled_at || "").trim();
+      const reached = autoDisabledReason === "max_execute_count_reached"
+        || !!(maxExecuteCount != null && maxExecuteCount > 0 && remainingExecuteCount === 0 && !_coerceBoolClient(row.enabled, true));
+      return {
+        hasMeta: !!hasMeta,
+        maxExecuteCount,
+        executedCount,
+        remainingExecuteCount,
+        lastCountedJobId: String(row.last_counted_job_id || "").trim(),
+        autoDisabledReason,
+        autoDisabledAt,
+        reached,
+      };
+    }
+
+    function heartbeatTaskExecuteLimitInlineText(task) {
+      const meta = heartbeatTaskExecuteLimitMeta(task);
+      if (!meta.hasMeta) return "";
+      if (meta.reached) {
+        if (meta.maxExecuteCount != null && meta.maxExecuteCount > 0 && meta.executedCount != null) {
+          return "已执行 " + meta.executedCount + " / " + meta.maxExecuteCount + "，已达上限自动关闭";
+        }
+        if (meta.maxExecuteCount != null && meta.maxExecuteCount > 0) {
+          return "已达 " + meta.maxExecuteCount + " 次上限，任务已自动关闭";
+        }
+        return "已达上限自动关闭";
+      }
+      if (meta.maxExecuteCount === 0) {
+        return meta.executedCount != null
+          ? ("最大执行次数：不限，已执行 " + meta.executedCount + " 次")
+          : "最大执行次数：不限";
+      }
+      if (meta.maxExecuteCount != null && meta.maxExecuteCount > 0) {
+        if (meta.executedCount != null && meta.remainingExecuteCount != null) {
+          return "已执行 " + meta.executedCount + " / " + meta.maxExecuteCount + "，剩余 " + meta.remainingExecuteCount + " 次";
+        }
+        if (meta.executedCount != null) {
+          return "已执行 " + meta.executedCount + " / " + meta.maxExecuteCount;
+        }
+        return "最大执行次数：" + meta.maxExecuteCount + " 次";
+      }
+      if (meta.executedCount != null && meta.remainingExecuteCount != null) {
+        return "已执行 " + meta.executedCount + " 次，剩余 " + meta.remainingExecuteCount + " 次";
+      }
+      if (meta.executedCount != null) return "已执行 " + meta.executedCount + " 次";
+      return "执行次数状态待回传";
     }
 
     function sessionHeartbeatLatestTriggeredAt(tasks = [], summary = null) {
@@ -3018,6 +3151,7 @@
           daily_time: String(row.dailyTime || row.daily_time || "09:30").trim() || "09:30",
           weekdays: normalizeHeartbeatWeekdaysClient(row.weekdays),
           busy_policy: String(row.busyPolicy || row.busy_policy || "run_on_next_idle").trim() || "run_on_next_idle",
+          max_execute_count: Math.max(0, Number(row.maxExecuteCount || row.max_execute_count || 0)),
           context_scope: {
             recent_tasks_limit: Math.max(0, Number(contextScope.recentTasksLimit || contextScope.recent_tasks_limit || 10)),
             recent_runs_limit: Math.max(0, Number(contextScope.recentRunsLimit || contextScope.recent_runs_limit || 10)),
@@ -3226,6 +3360,8 @@
     function messageObjectViewerOpenUrl(target, item) {
       const direct = String((target && target.openUrl) || "").trim();
       if (direct) return direct;
+      const trustedHtmlPreviewUrl = messageObjectViewerTrustedHtmlPreviewUrl(target, item);
+      if (trustedHtmlPreviewUrl) return trustedHtmlPreviewUrl;
       const path = String(((item && item.path) || (target && target.path) || (target && target.value) || "")).trim();
       if (!path) return "";
       if (/^https?:\/\//i.test(path)) return path;
@@ -3234,6 +3370,30 @@
         const previewUrl = messageObjectViewerPreviewBlobUrl(target, item);
         if (previewUrl) return previewUrl;
         return String(location.origin || "") + "/api/fs/open?path=" + encodeURIComponent(path);
+      }
+      return "";
+    }
+
+    function messageObjectViewerTrustedHtmlPreviewUrl(target, item) {
+      const row = (item && typeof item === "object") ? item : null;
+      if (!row || String(row.kind || "") !== "file") return "";
+      const previewMode = String(row.preview_mode || "").trim().toLowerCase();
+      const name = String(row.name || "").trim();
+      const relativePath = String(row.relative_path || "").trim().replace(/\\/g, "/");
+      const absPath = String(row.path || (target && target.path) || "").trim().replace(/\\/g, "/");
+      if (previewMode !== "html" || !name || !/\.html?$/i.test(name)) return "";
+      if (/^\/share\//.test(absPath)) return String(location.origin || "") + absPath;
+      if (relativePath.indexOf("web/page_previews/") === 0) {
+        return String(location.origin || "") + "/share/" + encodeURIComponent(name);
+      }
+      if (relativePath.indexOf("static_sites/share/") === 0) {
+        return String(location.origin || "") + "/share/" + encodeURIComponent(name);
+      }
+      if (/\/web\/page_previews\/[^/]+\.html?$/i.test(absPath)) {
+        return String(location.origin || "") + "/share/" + encodeURIComponent(name);
+      }
+      if (/\/static_sites\/share\/[^/]+\.html?$/i.test(absPath)) {
+        return String(location.origin || "") + "/share/" + encodeURIComponent(name);
       }
       return "";
     }
@@ -4113,6 +4273,7 @@
         return;
       }
       if (mode === "html") {
+        const trustedHtmlPreviewUrl = messageObjectViewerTrustedHtmlPreviewUrl(MESSAGE_OBJECT_VIEWER.target, item);
         if (item.truncated) {
           body.appendChild(el("div", {
             class: "hint",
@@ -4122,14 +4283,19 @@
         const frameWrap = el("div", { class: "msgobj-html-preview-wrap" });
         const frame = el("iframe", {
           class: "msgobj-html-preview",
-          sandbox: "",
           referrerpolicy: "no-referrer",
           title: String(item.name || item.path || "HTML 预览"),
         });
-        try {
-          frame.srcdoc = String(item.content || "");
-        } catch (_) {
-          frame.srcdoc = "<!doctype html><html><body><pre>HTML 预览加载失败</pre></body></html>";
+        if (trustedHtmlPreviewUrl) {
+          frame.setAttribute("sandbox", "allow-scripts allow-same-origin");
+          frame.src = trustedHtmlPreviewUrl;
+        } else {
+          frame.setAttribute("sandbox", "");
+          try {
+            frame.srcdoc = String(item.content || "");
+          } catch (_) {
+            frame.srcdoc = "<!doctype html><html><body><pre>HTML 预览加载失败</pre></body></html>";
+          }
         }
         frameWrap.appendChild(frame);
         body.appendChild(frameWrap);
@@ -4629,6 +4795,30 @@
       return false;
     }
 
+    function shouldKeepStructuredAssistantSender(raw, opts = {}) {
+      const role = String(opts.role || "").trim().toLowerCase();
+      if (role !== "assistant") return false;
+      const messageKind = firstNonEmptyText([
+        opts.messageKind,
+        raw && raw.message_kind,
+        raw && raw.messageKind,
+      ]).toLowerCase();
+      if (messageKind === "system_callback" || messageKind === "collab_update") return true;
+      const callbackToSessionId = firstNonEmptyText([
+        raw && raw.callback_to_session_id,
+        raw && raw.callbackToSessionId,
+        raw && raw.callback_to && raw.callback_to.session_id,
+        raw && raw.callbackTo && raw.callbackTo.sessionId,
+      ]);
+      const targetSessionId = firstNonEmptyText([
+        raw && raw.target_session_id,
+        raw && raw.targetSessionId,
+        raw && raw.communication_view && raw.communication_view.target_session_id,
+        raw && raw.communicationView && raw.communicationView.targetSessionId,
+      ]);
+      return !!(callbackToSessionId || targetSessionId);
+    }
+
     function resolveMessageSender(raw, opts = {}) {
       const role = String(opts.role || "").trim().toLowerCase();
       const allowSourceChannel = Object.prototype.hasOwnProperty.call(opts, "allowSourceChannel")
@@ -4645,6 +4835,7 @@
       const structuredType = normalizeSenderType(structured.type, role);
       const hasStructured = !!(structured.typeRaw || structured.id || structured.name);
       const defaultLabel = senderDefaultLabel(role, opts);
+      const keepStructuredAssistantSender = shouldKeepStructuredAssistantSender(raw, opts);
       if (hasStructured) {
         const assistantMismatch = role === "assistant" && structuredType !== "agent";
         const userLegacyUnknown = role === "user"
@@ -4653,7 +4844,7 @@
         if (!assistantMismatch && !userLegacyUnknown) {
           // 对 assistant 来说，run.sender_* 在 CCB 场景通常代表“发起方”（用户侧），
           // 不应覆盖当前会话的“响应方”身份展示。
-          if (role === "assistant") {
+          if (role === "assistant" && !keepStructuredAssistantSender) {
             const structuredLabel = firstNonEmptyText([structured.name, structured.id]);
             if (structuredLabel && defaultLabel && structuredLabel !== defaultLabel) {
               return {
@@ -5311,7 +5502,9 @@
       const latestSummary = (s && typeof s.latest_run_summary === "object")
         ? s.latest_run_summary
         : ((s && typeof s.latestRunSummary === "object") ? s.latestRunSummary : null);
-      const sessionDisplayState = String(firstNonEmptyText([
+      const latestEffectiveSummary = getSessionLatestEffectiveRunSummary(s);
+      const runtimeState = getSessionRuntimeState(s);
+      const sessionDisplayState = String(getSessionStatus(s) || firstNonEmptyText([
         s && s.session_display_state,
         s && s.sessionDisplayState,
         s && s.runtime_state && s.runtime_state.display_state,
@@ -5323,15 +5516,27 @@
         || sessionDisplayState === "retry_waiting"
         || sessionDisplayState === "external_busy"
       );
-      let text = String((s && s.lastPreview) || "").trim();
+      const activeRunId = String(runtimeState.active_run_id || "").trim();
+      const queuedRunId = String(runtimeState.queued_run_id || "").trim();
+      const latestSummaryStatus = normalizeDisplayState(firstNonEmptyText([
+        latestSummary && latestSummary.status,
+        latestSummary && latestSummary.display_state,
+        latestSummary && latestSummary.displayState,
+      ]), "idle");
+      const staleTerminalErrorWhileWorking = workingState
+        && latestSummaryStatus === "error"
+        && !!(activeRunId || queuedRunId);
+      let text = String(getSessionPrimaryPreviewText(s) || "").trim();
       let role = String((s && s.lastSpeaker) || "assistant").toLowerCase() === "user" ? "user" : "assistant";
       const cachedSenderType = firstNonEmptyText([
         s && s.lastSenderType,
         latestSummary && latestSummary.sender_type,
       ]);
       const looksSystemSummary = normalizeSenderType(cachedSenderType, role) === "system";
-      let useCachedSender = true;
-      if (workingState && (!text || looksSystemSummary)) {
+      const usesSyntheticPreviewSender = sessionUsesSyntheticPreviewSender(s, text);
+      let useCachedSender = !usesSyntheticPreviewSender;
+      if (usesSyntheticPreviewSender) role = "assistant";
+      if (workingState && (!text || looksSystemSummary || staleTerminalErrorWhileWorking)) {
         const aiText = firstNonEmptyText([
           s && s.latestAiMsg,
           latestSummary && latestSummary.latest_ai_msg,
@@ -5344,6 +5549,16 @@
         if (preferredText) {
           text = preferredText;
           role = aiText ? "assistant" : "user";
+          useCachedSender = false;
+        } else {
+          text = sessionDisplayState === "queued"
+            ? "新消息已进入队列，等待开始"
+            : (sessionDisplayState === "retry_waiting"
+              ? "当前会话正在等待自动重试"
+              : (sessionDisplayState === "external_busy"
+                ? "当前会话被外部占用"
+                : "当前有消息执行中"));
+          role = "assistant";
           useCachedSender = false;
         }
       }

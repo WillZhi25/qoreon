@@ -3,24 +3,19 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>关系画板 · Qoreon</title>
+  <title>组织战略 · Qoreon</title>
+  <link rel="icon" href="data:," />
   <style>__INLINE_CSS__</style>
 </head>
 <body>
   <div class="page-shell">
     <section class="board-shell">
       <header class="toolbar">
-        <div class="toolbar-left">
-          <a class="chip link" id="taskLink" href="/share/project-task-dashboard.html">任务页</a>
-          <a class="chip link" id="curtainLink" href="/share/project-agent-curtain.html">消息瀑布</a>
-          <button class="chip" id="refreshBtn" type="button">刷新</button>
-          <button class="chip" id="saveLayoutBtn" type="button">保存布局</button>
-          <button class="chip" id="exportConfigBtn" type="button">导出JSON</button>
-          <button class="chip" id="copyConfigBtn" type="button">复制配置</button>
-          <span class="chip readonly">正式页 P2</span>
-          <span class="chip env" id="envBadge">stable</span>
-        </div>
-        <div class="toolbar-center">
+        <div class="toolbar-main">
+          <div class="chip-group" id="platformModeTabs" aria-label="平台视角" hidden>
+            <button class="chip is-active" data-platform-layout="project" type="button">项目</button>
+            <button class="chip" data-platform-layout="agent" type="button">Agent</button>
+          </div>
           <div class="chip-group" id="timeTabs" aria-label="时间窗口">
             <button class="chip is-active" data-window="1h" type="button">1小时</button>
             <button class="chip" data-window="3h" type="button">3小时</button>
@@ -34,34 +29,28 @@
             <button class="chip" id="customApplyBtn" type="button">应用</button>
           </div>
         </div>
-        <div class="toolbar-right">
-          <div class="toolbar-stack">
-            <div class="chip-group compact" aria-label="建线类型">
-              <span class="toolbar-label">建线</span>
-              <button class="chip is-active" data-relation-type="business" type="button">主责</button>
-              <button class="chip" data-relation-type="support" type="button">支撑</button>
-              <button class="chip" data-relation-type="dependency" type="button">依赖</button>
-            </div>
-            <div class="chip-group compact" aria-label="图例显示">
-              <span class="toolbar-label">图例</span>
-              <button class="chip is-active" data-visibility="business" type="button">主责</button>
-              <button class="chip is-active" data-visibility="support" type="button">支撑</button>
-              <button class="chip is-active" data-visibility="dependency" type="button">依赖</button>
-              <button class="chip is-active" data-visibility="message" type="button">通讯</button>
-              <button class="chip is-active" data-visibility="labels" type="button">标签</button>
-            </div>
+        <div class="toolbar-filters">
+          <div class="chip-group" id="platformCommScopeFilters" aria-label="沟通范围过滤" hidden>
+            <button class="chip is-active" data-comm-scope="all" type="button">全部</button>
+            <button class="chip" data-comm-scope="cross" type="button">跨项目</button>
+            <button class="chip" data-comm-scope="high" type="button">高频</button>
           </div>
-          <button class="chip" id="toggleLayersBtn" type="button">背景板</button>
-          <button class="chip" id="toggleDetailBtn" type="button">详情</button>
+          <div class="chip-group" id="platformCommCountFilters" aria-label="沟通数量过滤" hidden>
+            <span class="toolbar-label">数量</span>
+            <button class="chip is-active" data-comm-count-min="0" type="button">全部</button>
+            <button class="chip" data-comm-count-min="2" type="button">2+</button>
+            <button class="chip" data-comm-count-min="5" type="button">5+</button>
+            <button class="chip" data-comm-count-min="10" type="button">10+</button>
+          </div>
         </div>
       </header>
 
       <div class="meta-row">
-        <div id="boardMeta">关系画板加载中...</div>
-        <div id="summaryMeta">背景板 0 · Agent 0 · 消息 0 · 通讯 0</div>
+        <div id="boardMeta">组织战略加载中...</div>
+        <div id="summaryMeta">背景板 0 · Agent 0 · 业务关系 0 · 沟通线 0</div>
       </div>
 
-      <div class="status-banner is-loading" id="statusBanner">正在加载关系画板...</div>
+      <div class="status-banner is-loading" id="statusBanner">正在加载组织战略...</div>
 
       <aside class="floating-panel layers-panel collapsed" id="layersPanel">
         <div class="panel-head">
@@ -77,7 +66,7 @@
             <div id="groupList"></div>
           </div>
           <div class="panel-section">
-            <div class="panel-section-title">Agent 节点池</div>
+            <div class="panel-section-title" id="rosterSectionTitle">Agent 节点池</div>
             <input class="field-input compact" id="searchInput" placeholder="搜索 Agent / 通道 / 角色" />
             <div id="rosterList"></div>
           </div>
@@ -118,52 +107,23 @@
         </div>
       </div>
 
-      <div class="floating-replay" id="replayBar">
-        <span class="replay-label">回放</span>
-        <button class="chip" id="playBtn" type="button">播放</button>
-        <button class="chip" id="pauseBtn" type="button">暂停</button>
-        <button class="chip" id="replayResetBtn" type="button">重播</button>
-        <button class="chip is-active" data-replay-speed="1" type="button">1x</button>
-        <button class="chip" data-replay-speed="4" type="button">4x</button>
-        <button class="chip" data-replay-speed="10" type="button">10x</button>
-        <div class="replay-timeline">
-          <span class="replay-time" id="replayCurrentTime">静止视图</span>
-          <div class="replay-track">
-            <div class="replay-markers" id="replayMarkers"></div>
-            <input class="replay-slider" id="replaySlider" type="range" min="0" max="1000" value="1000" />
-          </div>
-          <span class="replay-time" id="replayEndTime">--</span>
-        </div>
-      </div>
-
-      <div class="floating-mini-map" id="miniMapBox">
-        <div class="mini-map-toolbar">
-          <div class="panel-kicker">缩略图</div>
-          <div class="mini-map-actions">
-            <button class="chip mini" id="zoomOutBtn" type="button">－</button>
-            <button class="chip mini" id="zoomResetBtn" type="button">100%</button>
-            <button class="chip mini" id="zoomInBtn" type="button">＋</button>
-          </div>
-        </div>
-        <div class="mini-map" id="miniMap"></div>
-      </div>
     </section>
+
+    <div class="floating-mini-map" id="miniMapBox">
+      <div class="mini-map-toolbar">
+        <div class="panel-kicker">缩略图</div>
+        <div class="mini-map-actions">
+          <button class="chip mini" id="zoomOutBtn" type="button">－</button>
+          <button class="chip mini" id="zoomResetBtn" type="button">100%</button>
+          <button class="chip mini" id="zoomInBtn" type="button">＋</button>
+        </div>
+      </div>
+      <div class="mini-map" id="miniMap"></div>
+    </div>
+
   </div>
 
   <div class="bubble-tooltip" id="bubbleTooltip"></div>
-
-  <div class="dialog-mask" id="messageDialog" hidden>
-    <div class="dialog-card">
-      <div class="dialog-head">
-        <div>
-          <div class="dialog-kicker">消息详情</div>
-          <div class="dialog-title" id="messageDialogTitle">-</div>
-        </div>
-        <button class="panel-close" id="messageDialogCloseBtn" type="button">关闭</button>
-      </div>
-      <div class="dialog-body" id="messageDialogBody"></div>
-    </div>
-  </div>
 
   <script id="data" type="application/json">__PAYLOAD__</script>
   <script>__INLINE_JS__</script>

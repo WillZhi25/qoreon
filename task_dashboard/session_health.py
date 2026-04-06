@@ -537,6 +537,9 @@ def build_session_health_page(
                 "branch": str(session.get("branch") or "").strip(),
                 "worktree_root": str(session.get("worktree_root") or "").strip(),
                 "workdir": str(session.get("workdir") or "").strip(),
+                "task_tracking": dict(session.get("task_tracking") or {})
+                if isinstance(session.get("task_tracking"), dict)
+                else {},
                 "is_primary": bool(session.get("is_primary")),
                 "session_role": str(session.get("session_role") or "").strip() or ("primary" if bool(session.get("is_primary")) else "child"),
                 "status": str(session.get("status") or "").strip() or "active",

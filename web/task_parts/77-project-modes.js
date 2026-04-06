@@ -416,7 +416,7 @@
         e.stopPropagation();
         const ok = await setTaskScheduleState(pid, dragPath, true, "drag");
         if (ok) {
-          STATE.selectedPath = dragPath;
+          setSelectedTaskRef(dragPath);
         }
       });
 
@@ -546,6 +546,13 @@
               }
             }
             if (row && row.channel_name) meta.appendChild(chip(String(row.channel_name), "muted"));
+            const createdAtText = compactDateTime(firstNonEmptyText([row && row.created_at], ""))
+              || shortDateTime(firstNonEmptyText([row && row.created_at], ""));
+            if (createdAtText) meta.appendChild(chip("创建:" + createdAtText, "muted"));
+            const dueText = compactDateTime(firstNonEmptyText([row && row.due], ""))
+              || shortDateTime(firstNonEmptyText([row && row.due], ""))
+              || String(firstNonEmptyText([row && row.due], "") || "").trim();
+            if (dueText) meta.appendChild(chip("截止:" + dueText, "warn"));
             if (row && row.updated_at) meta.appendChild(chip("更新:" + String(row.updated_at), "muted"));
             if (row && row.exists === false) meta.appendChild(chip("文件缺失", "bad"));
             rowNode.appendChild(meta);
@@ -632,6 +639,13 @@
                 const childMeta = el("div", { class: "task-group-child-meta" });
                 childMeta.appendChild(chip(bucketKeyForStatus(child.status), toneForBucket(bucketKeyForStatus(child.status))));
                 if (child.channel) childMeta.appendChild(chip(child.channel, "muted"));
+                const childCreatedAtText = compactDateTime(firstNonEmptyText([child && child.created_at], ""))
+                  || shortDateTime(firstNonEmptyText([child && child.created_at], ""));
+                if (childCreatedAtText) childMeta.appendChild(chip("创建:" + childCreatedAtText, "muted"));
+                const childDueText = compactDateTime(firstNonEmptyText([child && child.due], ""))
+                  || shortDateTime(firstNonEmptyText([child && child.due], ""))
+                  || String(firstNonEmptyText([child && child.due], "") || "").trim();
+                if (childDueText) childMeta.appendChild(chip("截止:" + childDueText, "warn"));
                 if (child.updated_at) childMeta.appendChild(chip("更新:" + child.updated_at, "muted"));
                 left.appendChild(childMeta);
                 childRow.appendChild(left);
@@ -2349,228 +2363,831 @@
       stage.appendChild(relPanel);
     }
 
+    const TASK_OBSERVATORY_UI = {
+      filterByProject: Object.create(null),
+      sortBasisByProject: Object.create(null),
+      visibleLimitByProject: Object.create(null),
+      directoryRequestedByProject: Object.create(null),
+      detailRequestedByProject: Object.create(null),
+    };
+
+    const TASK_OBSERVATORY_DEFAULT_VISIBLE = 10;
+    const TASK_OBSERVATORY_LOAD_STEP = 4;
+    const TASK_OBSERVATORY_STATUS_OPTIONS = [
+      { key: "all", label: "全部" },
+      { key: "todo", label: "待办" },
+      { key: "in_progress", label: "进行中" },
+      { key: "review", label: "待验收" },
+      { key: "done", label: "已完成" },
+      { key: "paused", label: "暂缓" },
+    ];
+    const TASK_OBSERVATORY_SORT_OPTIONS = [
+      { key: "created_at", label: "创建时间" },
+      { key: "latest_active", label: "最近活跃" },
+    ];
+
+    function taskObservatoryProjectKey(projectId = STATE.project) {
+      return String(projectId || "").trim();
+    }
+
+    function taskObservatoryActiveFilter(projectId = STATE.project) {
+      const key = taskObservatoryProjectKey(projectId);
+      return String(TASK_OBSERVATORY_UI.filterByProject[key] || "all").trim() || "all";
+    }
+
+    function taskObservatorySortBasis(projectId = STATE.project) {
+      const key = taskObservatoryProjectKey(projectId);
+      return String(TASK_OBSERVATORY_UI.sortBasisByProject[key] || "created_at").trim() || "created_at";
+    }
+
+    function taskObservatorySetActiveFilter(projectId, filterKey) {
+      const key = taskObservatoryProjectKey(projectId);
+      const next = String(filterKey || "all").trim() || "all";
+      TASK_OBSERVATORY_UI.filterByProject[key] = next;
+      TASK_OBSERVATORY_UI.visibleLimitByProject[key] = TASK_OBSERVATORY_DEFAULT_VISIBLE;
+    }
+
+    function taskObservatorySetSortBasis(projectId, basisKey) {
+      const key = taskObservatoryProjectKey(projectId);
+      const next = String(basisKey || "created_at").trim() || "created_at";
+      TASK_OBSERVATORY_UI.sortBasisByProject[key] = next;
+      TASK_OBSERVATORY_UI.visibleLimitByProject[key] = TASK_OBSERVATORY_DEFAULT_VISIBLE;
+    }
+
+    function taskObservatoryVisibleLimit(projectId = STATE.project) {
+      const key = taskObservatoryProjectKey(projectId);
+      const value = Number(TASK_OBSERVATORY_UI.visibleLimitByProject[key] || TASK_OBSERVATORY_DEFAULT_VISIBLE);
+      return Number.isFinite(value) && value > 0 ? Math.max(TASK_OBSERVATORY_DEFAULT_VISIBLE, value) : TASK_OBSERVATORY_DEFAULT_VISIBLE;
+    }
+
+    function taskObservatoryIncreaseVisibleLimit(projectId = STATE.project) {
+      const key = taskObservatoryProjectKey(projectId);
+      TASK_OBSERVATORY_UI.visibleLimitByProject[key] = taskObservatoryVisibleLimit(projectId) + TASK_OBSERVATORY_LOAD_STEP;
+    }
+
+    function taskObservatoryNormalizeStatusKey(value) {
+      return taskDisplayStatusMeta(value, "待办").key;
+    }
+
+    function taskObservatoryTimeNum(parts = []) {
+      const text = String(firstNonEmptyText(Array.isArray(parts) ? parts : [parts], "") || "").trim();
+      if (!text) return 0;
+      const parsed = Date.parse(text);
+      if (Number.isFinite(parsed)) return parsed;
+      if (typeof toTimeNum === "function") return Number(toTimeNum(text) || 0);
+      return 0;
+    }
+
+    function taskObservatoryRefObservedTs(row, fallback = 0) {
+      return Math.max(
+        Number(fallback || 0),
+        taskObservatoryTimeNum([
+          row && row.latest_action_at,
+          row && row.last_seen_at,
+          row && row.first_seen_at,
+        ])
+      );
+    }
+
+    function taskObservatoryCreatedTs(row) {
+      return taskObservatoryTimeNum([row && row.created_at]);
+    }
+
+    function taskObservatorySessionNeedsCreatedAtHydration(session) {
+      const tracking = normalizeTaskTrackingClient(session && session.task_tracking ? session.task_tracking : null);
+      if (!tracking || !tracking.current_task_ref) return true;
+      return !String(tracking.current_task_ref.created_at || "").trim();
+    }
+
+    function taskObservatorySortTsDesc(aTs, bTs) {
+      const a = Number(aTs || 0);
+      const b = Number(bTs || 0);
+      if (!a && !b) return 0;
+      if (!a) return 1;
+      if (!b) return -1;
+      return b - a;
+    }
+
+    function taskObservatoryGroupSortTs(group, sortBasis) {
+      if (String(sortBasis || "").trim() === "latest_active") {
+        return Number(group && group.latestTs || 0);
+      }
+      return Number(group && group.createdTs || 0);
+    }
+
+    function taskObservatoryCompareGroups(a, b, sortBasis) {
+      const primary = taskObservatorySortTsDesc(
+        taskObservatoryGroupSortTs(a, sortBasis),
+        taskObservatoryGroupSortTs(b, sortBasis)
+      );
+      if (primary) return primary;
+      const fallback = taskObservatorySortTsDesc(
+        Number(a && a.latestTs || 0),
+        Number(b && b.latestTs || 0)
+      );
+      if (fallback) return fallback;
+      return String(a && a.parent && a.parent.task_title || "").localeCompare(
+        String(b && b.parent && b.parent.task_title || ""),
+        "zh-Hans-CN"
+      );
+    }
+
+    function taskObservatorySessionObservedTs(session, tracking = null) {
+      const summary = session && session.latest_effective_run_summary && typeof session.latest_effective_run_summary === "object"
+        ? session.latest_effective_run_summary
+        : {};
+      return taskObservatoryTimeNum([
+        tracking && tracking.updated_at,
+        session && session.lastActiveAt,
+        summary.created_at,
+        session && session.created_at,
+      ]);
+    }
+
+    function taskObservatoryCopyScalarIfPresent(target, source, key) {
+      const value = source && source[key];
+      if (value === undefined || value === null) return;
+      if (typeof value === "string" && !String(value).trim()) return;
+      target[key] = value;
+    }
+
+    function taskObservatoryMergeRoleArray(target, source, key) {
+      const rows = Array.isArray(source && source[key]) ? source[key] : [];
+      if (!rows.length) return;
+      const current = Array.isArray(target[key]) ? target[key] : [];
+      if (rows.length >= current.length) {
+        target[key] = rows.map((row) => cloneConversationTaskRoleMember(row)).filter(Boolean);
+      }
+    }
+
+    function taskObservatoryMergeCustomRoles(target, source) {
+      const rows = Array.isArray(source && source.custom_roles) ? source.custom_roles : [];
+      const current = Array.isArray(target.custom_roles) ? target.custom_roles : [];
+      if (rows.length >= current.length) {
+        target.custom_roles = rows.map((row) => cloneConversationTaskCustomRole(row)).filter(Boolean);
+      }
+    }
+
+    function taskObservatoryMergeTaskRow(base, nextRow, fallbackTs = 0) {
+      const next = cloneConversationTaskDetailFallback(nextRow);
+      if (!next) return base ? cloneConversationTaskDetailFallback(base) : null;
+      if (!base) {
+        const created = cloneConversationTaskDetailFallback(next) || {};
+        created.__observedTs = taskObservatoryRefObservedTs(next, fallbackTs);
+        return created;
+      }
+      const merged = cloneConversationTaskDetailFallback(base) || {};
+      const currentTs = Math.max(Number(merged.__observedTs || 0), taskObservatoryRefObservedTs(merged, 0));
+      const nextTs = taskObservatoryRefObservedTs(next, fallbackTs);
+      [
+        "task_id",
+        "parent_task_id",
+        "created_at",
+        "due",
+        "task_path",
+        "task_title",
+        "task_primary_status",
+        "relation",
+        "relation_label",
+        "source",
+        "first_seen_at",
+        "last_seen_at",
+        "task_summary_text",
+      ].forEach((key) => {
+        if (!merged[key]) taskObservatoryCopyScalarIfPresent(merged, next, key);
+      });
+      if (!merged.next_owner && next.next_owner) {
+        merged.next_owner = next.next_owner && typeof next.next_owner === "object"
+          ? { ...next.next_owner }
+          : next.next_owner;
+      }
+      if (!merged.main_owner && next.main_owner) merged.main_owner = cloneConversationTaskRoleMember(next.main_owner);
+      taskObservatoryMergeRoleArray(merged, next, "collaborators");
+      taskObservatoryMergeRoleArray(merged, next, "validators");
+      taskObservatoryMergeRoleArray(merged, next, "challengers");
+      taskObservatoryMergeRoleArray(merged, next, "backup_owners");
+      taskObservatoryMergeRoleArray(merged, next, "management_slot");
+      taskObservatoryMergeCustomRoles(merged, next);
+      merged.activity_count = Math.max(Number(merged.activity_count || 0), Number(next.activity_count || 0));
+      if (nextTs >= currentTs) {
+        [
+          "latest_action_at",
+          "latest_action_kind",
+          "latest_action_text",
+          "latest_action_source",
+          "task_primary_status",
+          "task_summary_text",
+          "next_owner",
+          "main_owner",
+          "collaborators",
+          "validators",
+          "challengers",
+          "backup_owners",
+          "management_slot",
+          "custom_roles",
+        ].forEach((key) => {
+          if (key === "next_owner") {
+            if (next.next_owner) {
+              merged.next_owner = next.next_owner && typeof next.next_owner === "object"
+                ? { ...next.next_owner }
+                : next.next_owner;
+            }
+            return;
+          }
+          if (key === "main_owner") {
+            if (next.main_owner) merged.main_owner = cloneConversationTaskRoleMember(next.main_owner);
+            return;
+          }
+          if (key === "custom_roles") {
+            merged.custom_roles = Array.isArray(next.custom_roles)
+              ? next.custom_roles.map((row) => cloneConversationTaskCustomRole(row)).filter(Boolean)
+              : [];
+            return;
+          }
+          if (Array.isArray(next[key])) {
+            merged[key] = next[key].map((row) => cloneConversationTaskRoleMember(row)).filter(Boolean);
+            return;
+          }
+          taskObservatoryCopyScalarIfPresent(merged, next, key);
+        });
+        merged.__observedTs = nextTs;
+      } else {
+        merged.__observedTs = currentTs;
+      }
+      return merged;
+    }
+
+    function taskObservatoryAgentNames(row) {
+      const names = [];
+      if (typeof conversationTaskCoreAgentEntries === "function") {
+        conversationTaskCoreAgentEntries(row).forEach((entry) => {
+          const text = String(entry && entry.text || "").trim();
+          if (text) names.push(text);
+        });
+      }
+      if (!names.length) {
+        const owner = conversationTaskOwnerDisplayMeta(row && row.next_owner);
+        if (owner && owner.text) names.push(owner.text);
+      }
+      return Array.from(new Set(names));
+    }
+
+    function taskObservatoryAvatarText(name) {
+      const text = String(name || "").trim();
+      return text ? text.slice(0, 1) : "任";
+    }
+
+    function taskObservatoryDayKey(ts) {
+      const value = Number(ts || 0);
+      if (!value) return "未标时间";
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return "未标时间";
+      const y = date.getFullYear();
+      const m = String(date.getMonth() + 1).padStart(2, "0");
+      const d = String(date.getDate()).padStart(2, "0");
+      return [y, m, d].join("-");
+    }
+
+    function taskObservatoryDayLabel(dayKey) {
+      const key = String(dayKey || "").trim();
+      const sortBasis = taskObservatorySortBasis();
+      if (!key || key === "未标时间") {
+        return sortBasis === "latest_active" ? "未标活跃时间" : "未标创建时间";
+      }
+      const date = new Date(key + "T00:00:00");
+      if (Number.isNaN(date.getTime())) return key;
+      const week = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"][date.getDay()];
+      const prefix = sortBasis === "latest_active" ? "活跃于 " : "创建于 ";
+      return prefix + String(date.getMonth() + 1).padStart(2, "0") + "月" + String(date.getDate()).padStart(2, "0") + "日 " + week;
+    }
+
+    function taskObservatoryDetailPayload(group) {
+      const item = (group && typeof group === "object") ? group : {};
+      const children = Array.isArray(item.children) ? item.children.map((row) => cloneConversationTaskDetailFallback(row)).filter(Boolean) : [];
+      return {
+        taskTracking: {
+          version: "v1.1",
+          updated_at: String(item.latestAt || "").trim(),
+          current_task_ref: cloneConversationTaskDetailFallback(item.parent),
+          conversation_task_refs: children,
+          recent_task_actions: Array.isArray(item.actions) ? item.actions.map((row) => ({ ...row })) : [],
+        },
+        loading: false,
+        error: "",
+      };
+    }
+
+    function taskObservatoryOpenDetail(row, group, groupTitle) {
+      openConversationTaskDetailViewerStandalone(
+        row,
+        taskObservatoryDetailPayload(group),
+        { sessionKey: taskObservatoryProjectKey(STATE.project), groupTitle }
+      );
+    }
+
+    function taskObservatoryBuildStatButton(projectId, option, count) {
+      const active = taskObservatoryActiveFilter(projectId) === option.key;
+      const btn = el("button", {
+        class: "taskobs-stat" + (active ? " is-active" : ""),
+        type: "button",
+      });
+      btn.setAttribute("aria-pressed", active ? "true" : "false");
+      btn.appendChild(el("span", { class: "taskobs-stat-label", text: option.label }));
+      btn.appendChild(el("strong", { class: "taskobs-stat-value", text: String(count) }));
+      btn.addEventListener("click", () => {
+        taskObservatorySetActiveFilter(projectId, option.key);
+        render();
+      });
+      return btn;
+    }
+
+    function taskObservatoryBuildSortButton(projectId, option) {
+      const active = taskObservatorySortBasis(projectId) === option.key;
+      const btn = el("button", {
+        class: "taskobs-sort-btn" + (active ? " is-active" : ""),
+        type: "button",
+        text: option.label,
+      });
+      btn.setAttribute("aria-pressed", active ? "true" : "false");
+      btn.addEventListener("click", () => {
+        taskObservatorySetSortBasis(projectId, option.key);
+        render();
+      });
+      return btn;
+    }
+
+    function taskObservatoryBuildAvatarGroup(names = []) {
+      const rows = Array.isArray(names) ? names.filter(Boolean) : [];
+      const wrap = el("div", { class: "taskobs-avatars" });
+      if (!rows.length) {
+        wrap.appendChild(el("span", { class: "taskobs-avatar is-empty", text: "—" }));
+        return wrap;
+      }
+      rows.slice(0, 6).forEach((name) => {
+        wrap.appendChild(el("span", {
+          class: "taskobs-avatar",
+          text: taskObservatoryAvatarText(name),
+          title: name,
+        }));
+      });
+      if (rows.length > 6) {
+        wrap.appendChild(el("span", {
+          class: "taskobs-avatar is-overflow",
+          text: "+" + (rows.length - 6),
+          title: "其余 " + (rows.length - 6) + " 位 Agent",
+        }));
+      }
+      return wrap;
+    }
+
+    function taskObservatoryCardNode(row, role, group, opts = {}) {
+      const item = (row && typeof row === "object") ? row : {};
+      const roleKey = role === "parent" ? "parent" : "child";
+      const statusMeta = taskDisplayStatusMeta(item.task_primary_status || item, "待办");
+      const card = el("button", {
+        class: "taskobs-card status-" + statusMeta.key + (roleKey === "parent" ? " is-parent" : " is-child"),
+        type: "button",
+      });
+      const top = el("div", { class: "taskobs-card-top" });
+      top.appendChild(buildTaskTypeBadge(item, { force: roleKey }));
+      top.appendChild(el("div", {
+        class: "taskobs-card-title",
+        text: conversationTaskTitleText(item),
+        title: String(firstNonEmptyText([item.task_title, item.task_path], "") || "").trim(),
+      }));
+      const chips = el("div", { class: "chips" });
+      chips.appendChild(buildTaskStatusChip(item.task_primary_status || item, "待办", "status-chip"));
+      top.appendChild(chips);
+      card.appendChild(top);
+
+      const meta = el("div", { class: "taskobs-card-meta" });
+      const updatedAtText = compactDateTime(firstNonEmptyText([
+        item.latest_action_at,
+        item.last_seen_at,
+        item.created_at,
+      ], "")) || shortDateTime(firstNonEmptyText([
+        item.latest_action_at,
+        item.last_seen_at,
+        item.created_at,
+      ], ""));
+      if (updatedAtText) {
+        const updatedWrap = el("div", { class: "taskobs-next-owner" });
+        updatedWrap.appendChild(el("span", { text: "更新" }));
+        updatedWrap.appendChild(el("strong", { text: updatedAtText }));
+        meta.appendChild(updatedWrap);
+      }
+      const owner = conversationTaskOwnerDisplayMeta(item.next_owner);
+      const ownerWrap = el("div", { class: "taskobs-next-owner" });
+      ownerWrap.appendChild(el("span", { text: "负责Agent" }));
+      ownerWrap.appendChild(el("strong", { text: owner.text || "待明确" }));
+      meta.appendChild(ownerWrap);
+      const timeMeta = buildConversationTaskMetaLine([
+        item.created_at
+          ? ("创建 " + (compactDateTime(item.created_at) || shortDateTime(item.created_at) || String(item.created_at || "").trim()))
+          : "",
+        item.due
+          ? ("截止 " + (compactDateTime(item.due) || shortDateTime(item.due) || String(item.due || "").trim()))
+          : "",
+      ]);
+      if (timeMeta) {
+        timeMeta.className = "taskobs-time-meta";
+        meta.appendChild(timeMeta);
+      }
+      card.appendChild(meta);
+
+      const note = el("div", { class: "taskobs-card-note" });
+      const textNode = el("span", {
+        text: taskSummaryText(item, "当前暂无补充活动。"),
+      });
+      note.appendChild(textNode);
+      card.appendChild(note);
+
+      const roleGroups = buildTaskRoleGroups(item, {
+        className: "taskobs-role-groups",
+        avatarClassName: "is-small",
+      });
+      if (roleGroups) card.appendChild(roleGroups);
+      card.addEventListener("click", () => {
+        taskObservatoryOpenDetail(item, group, roleKey === "parent" ? "当前任务" : "相关任务");
+      });
+      return card;
+    }
+
+    function taskObservatoryCreateGroup(parent, session, view) {
+      const tracking = view && view.tracking ? view.tracking : null;
+      const latestTs = taskObservatoryRefObservedTs(parent, taskObservatorySessionObservedTs(session, tracking));
+      const latestAt = String(firstNonEmptyText([
+        parent && parent.latest_action_at,
+        tracking && tracking.updated_at,
+        session && session.lastActiveAt,
+      ], "") || "").trim();
+      const createdTs = taskObservatoryCreatedTs(parent);
+      const createdAt = String(firstNonEmptyText([parent && parent.created_at], "") || "").trim();
+      return {
+        key: conversationTaskStableKey(parent),
+        parent: taskObservatoryMergeTaskRow(null, parent, latestTs),
+        parentAgentNames: new Set(taskObservatoryAgentNames(parent)),
+        childMap: Object.create(null),
+        childAgentNamesByKey: Object.create(null),
+        actions: [],
+        actionKeys: new Set(),
+        sessionIds: new Set(),
+        createdTs,
+        createdAt,
+        latestTs,
+        latestAt,
+      };
+    }
+
+    function taskObservatoryMergeGroup(group, session, view) {
+      const tracking = view && view.tracking ? view.tracking : null;
+      const parent = view && view.currentRef ? view.currentRef : null;
+      if (!group || !parent) return group;
+      const parentTs = taskObservatoryRefObservedTs(parent, taskObservatorySessionObservedTs(session, tracking));
+      group.parent = taskObservatoryMergeTaskRow(group.parent, parent, parentTs);
+      taskObservatoryAgentNames(parent).forEach((name) => group.parentAgentNames.add(name));
+      group.latestTs = Math.max(Number(group.latestTs || 0), Number(parentTs || 0));
+      if (!group.latestAt && parent.latest_action_at) group.latestAt = String(parent.latest_action_at || "").trim();
+      const createdTs = taskObservatoryCreatedTs(parent);
+      group.createdTs = Math.max(Number(group.createdTs || 0), Number(createdTs || 0));
+      if (!group.createdAt && parent.created_at) group.createdAt = String(parent.created_at || "").trim();
+      if (tracking && tracking.updated_at) {
+        const trackingTs = taskObservatoryTimeNum([tracking.updated_at]);
+        if (trackingTs >= Number(group.latestTs || 0)) group.latestAt = String(tracking.updated_at || "").trim();
+        group.latestTs = Math.max(Number(group.latestTs || 0), trackingTs);
+      }
+      const sessionId = String(firstNonEmptyText([session && session.id, session && session.session_id], "") || "").trim();
+      if (sessionId) group.sessionIds.add(sessionId);
+
+      (Array.isArray(view.relatedRows) ? view.relatedRows : []).forEach((row) => {
+        const childKey = conversationTaskStableKey(row);
+        if (!childKey) return;
+        const childTs = taskObservatoryRefObservedTs(row, parentTs);
+        group.childMap[childKey] = taskObservatoryMergeTaskRow(group.childMap[childKey] || null, row, childTs);
+        if (!group.childAgentNamesByKey[childKey]) group.childAgentNamesByKey[childKey] = new Set();
+        taskObservatoryAgentNames(row).forEach((name) => group.childAgentNamesByKey[childKey].add(name));
+      });
+
+      (Array.isArray(view.actions) ? view.actions : []).forEach((row) => {
+        const action = (row && typeof row === "object") ? { ...row } : null;
+        if (!action) return;
+        const actionKey = [
+          conversationTaskStableKey(action),
+          String(action.action_kind || "").trim(),
+          String(action.action_text || "").trim(),
+          String(action.at || "").trim(),
+          String(action.source_agent_name || action.source_channel || "").trim(),
+        ].join("::");
+        if (group.actionKeys.has(actionKey)) return;
+        group.actionKeys.add(actionKey);
+        group.actions.push(action);
+      });
+
+      return group;
+    }
+
+    function taskObservatoryBuildGroups(projectId, sessions) {
+      const groupsByKey = Object.create(null);
+      (Array.isArray(sessions) ? sessions : []).forEach((session) => {
+        if (!hasConversationTaskTrackingData(session && session.task_tracking)) return;
+        const view = resolveConversationTaskTrackingPayload({
+          taskTracking: session.task_tracking || null,
+          loading: false,
+          error: "",
+        });
+        if (!view.currentRef) return;
+        const key = conversationTaskStableKey(view.currentRef);
+        if (!key) return;
+        if (!groupsByKey[key]) groupsByKey[key] = taskObservatoryCreateGroup(view.currentRef, session, view);
+        taskObservatoryMergeGroup(groupsByKey[key], session, view);
+      });
+      return Object.values(groupsByKey).map((group) => {
+        const children = Object.values(group.childMap || {})
+          .sort((a, b) => Number(b && b.__observedTs || 0) - Number(a && a.__observedTs || 0));
+        const childAgentNamesByKey = Object.create(null);
+        Object.keys(group.childAgentNamesByKey || {}).forEach((key) => {
+          childAgentNamesByKey[key] = Array.from(group.childAgentNamesByKey[key] || []);
+        });
+        return {
+          key: group.key,
+          parent: group.parent,
+          parentAgentNames: Array.from(group.parentAgentNames || []),
+          childAgentNamesByKey,
+          children,
+          actions: group.actions
+            .slice()
+            .sort((a, b) => taskObservatoryTimeNum([b && b.at]) - taskObservatoryTimeNum([a && a.at])),
+          createdTs: Number(group.createdTs || 0),
+          createdAt: String(group.createdAt || "").trim(),
+          latestTs: Number(group.latestTs || 0),
+          latestAt: String(group.latestAt || "").trim(),
+          sessionIds: Array.from(group.sessionIds || []),
+        };
+      }).sort((a, b) => taskObservatoryCompareGroups(a, b, taskObservatorySortBasis(projectId)));
+    }
+
+    function taskObservatoryVisibleCards(group, filterKey = "all") {
+      const cards = [];
+      const pushCard = (row, role) => {
+        if (!row) return;
+        const statusKey = taskObservatoryNormalizeStatusKey(row && row.task_primary_status);
+        if (filterKey !== "all" && statusKey !== filterKey) return;
+        cards.push({ row, role });
+      };
+      pushCard(group && group.parent, "parent");
+      (Array.isArray(group && group.children) ? group.children : []).forEach((child) => {
+        pushCard(child, "child");
+      });
+      return cards;
+    }
+
+    function taskObservatoryBuildDays(groups, filterKey, visibleLimit, sortBasis) {
+      const filtered = (Array.isArray(groups) ? groups : []).filter((group) => {
+        return taskObservatoryVisibleCards(group, filterKey).length > 0;
+      });
+      const sorted = filtered.slice().sort((a, b) => taskObservatoryCompareGroups(a, b, sortBasis));
+      const visible = sorted.slice(0, Math.max(0, Number(visibleLimit || TASK_OBSERVATORY_DEFAULT_VISIBLE)));
+      const byDay = Object.create(null);
+      visible.forEach((group) => {
+        const dayKey = taskObservatoryDayKey(taskObservatoryGroupSortTs(group, sortBasis));
+        if (!byDay[dayKey]) byDay[dayKey] = [];
+        byDay[dayKey].push(group);
+      });
+      const days = Object.keys(byDay)
+        .sort((a, b) => {
+          if (a === "未标时间") return 1;
+          if (b === "未标时间") return -1;
+          return String(b).localeCompare(String(a));
+        })
+        .map((dayKey) => ({
+          key: dayKey,
+          label: taskObservatoryDayLabel(dayKey),
+          groups: byDay[dayKey].slice().sort((a, b) => taskObservatoryCompareGroups(a, b, sortBasis)),
+        }));
+      return {
+        days,
+        totalMatching: sorted.length,
+        visibleCount: visible.length,
+        hasMore: sorted.length > visible.length,
+      };
+    }
+
+    function taskObservatoryStats(groups) {
+      const rows = Array.isArray(groups) ? groups : [];
+      const out = Object.create(null);
+      TASK_OBSERVATORY_STATUS_OPTIONS.forEach((item) => {
+        if (item.key === "all") {
+          out[item.key] = rows.reduce((sum, group) => sum + taskObservatoryVisibleCards(group, "all").length, 0);
+          return;
+        }
+        out[item.key] = rows.reduce((sum, group) => sum + taskObservatoryVisibleCards(group, item.key).length, 0);
+      });
+      return out;
+    }
+
+    function taskObservatoryRenderBar(barNode, projectId, groups) {
+      if (!barNode) return;
+      barNode.innerHTML = "";
+      const toolbar = el("div", { class: "taskobs-toolbar" });
+      const sortWrap = el("div", { class: "taskobs-sort" });
+      sortWrap.appendChild(el("span", { class: "taskobs-sort-label", text: "排序基准" }));
+      const sortOptions = el("div", { class: "taskobs-sort-options" });
+      TASK_OBSERVATORY_SORT_OPTIONS.forEach((option) => {
+        sortOptions.appendChild(taskObservatoryBuildSortButton(projectId, option));
+      });
+      sortWrap.appendChild(sortOptions);
+      toolbar.appendChild(sortWrap);
+      const statsWrap = el("div", { class: "taskobs-stats" });
+      const stats = taskObservatoryStats(groups);
+      TASK_OBSERVATORY_STATUS_OPTIONS.forEach((option) => {
+        statsWrap.appendChild(taskObservatoryBuildStatButton(projectId, option, Number(stats[option.key] || 0)));
+      });
+      toolbar.appendChild(statsWrap);
+      barNode.appendChild(toolbar);
+    }
+
+    function taskObservatoryDayMetrics(groups, filterKey = "all") {
+      const rows = Array.isArray(groups) ? groups : [];
+      let parentCount = 0;
+      let childCount = 0;
+      let doneCount = 0;
+      let pendingCount = 0;
+      rows.forEach((group) => {
+        taskObservatoryVisibleCards(group, filterKey).forEach(({ row, role }) => {
+          if (role === "parent") parentCount += 1;
+          else childCount += 1;
+          if (taskObservatoryNormalizeStatusKey(row && row.task_primary_status) === "done") doneCount += 1;
+          else pendingCount += 1;
+        });
+      });
+      return {
+        parentCount,
+        childCount,
+        doneCount,
+        pendingCount,
+      };
+    }
+
+    function taskObservatoryEmptyNote(text, extraClass = "") {
+      return el("div", {
+        class: "taskobs-note" + (extraClass ? " " + extraClass : ""),
+        text: String(text || "").trim() || "当前暂无可展示内容。",
+      });
+    }
+
+    function taskObservatoryScheduleDirectoryLoad(projectId) {
+      const key = taskObservatoryProjectKey(projectId);
+      if (!key || TASK_OBSERVATORY_UI.directoryRequestedByProject[key]) return;
+      TASK_OBSERVATORY_UI.directoryRequestedByProject[key] = true;
+      ensureConversationProjectSessionDirectory(key)
+        .then(() => { render(); })
+        .catch(() => { render(); })
+        .finally(() => { TASK_OBSERVATORY_UI.directoryRequestedByProject[key] = false; });
+    }
+
+    function taskObservatoryScheduleDetailLoads(projectId, sessions, visibleLimit) {
+      const key = taskObservatoryProjectKey(projectId);
+      if (!key) return;
+      if (!TASK_OBSERVATORY_UI.detailRequestedByProject[key]) {
+        TASK_OBSERVATORY_UI.detailRequestedByProject[key] = Object.create(null);
+      }
+      const requested = TASK_OBSERVATORY_UI.detailRequestedByProject[key];
+      const sorted = Array.isArray(sessions) ? sessions.slice() : [];
+      const budget = Math.min(sorted.length, Math.max(Number(visibleLimit || TASK_OBSERVATORY_DEFAULT_VISIBLE) * 4, 18));
+      sorted.slice(0, budget).forEach((session) => {
+        const sid = String(firstNonEmptyText([session && session.id, session && session.session_id], "") || "").trim();
+        if (!sid) return;
+        const hasTaskTracking = hasConversationTaskTrackingData(session && session.task_tracking);
+        const needsCreatedAtHydration = taskObservatorySessionNeedsCreatedAtHydration(session);
+        if (hasTaskTracking && !needsCreatedAtHydration) return;
+        if (requested[sid]) return;
+        requested[sid] = "requested";
+        ensureConversationSessionDetailLoaded(sid, hasTaskTracking && needsCreatedAtHydration ? { force: true } : {})
+          .then(() => {
+            requested[sid] = "loaded";
+            render();
+          })
+          .catch(() => {
+            requested[sid] = "error";
+            render();
+          });
+      });
+    }
+
+    function taskObservatorySessionSortValue(session) {
+      const summary = session && session.latest_effective_run_summary && typeof session.latest_effective_run_summary === "object"
+        ? session.latest_effective_run_summary
+        : {};
+      return taskObservatoryTimeNum([
+        session && session.lastActiveAt,
+        summary.created_at,
+        session && session.created_at,
+      ]);
+    }
+
+    function taskObservatoryBoardNode(projectId, groups, loadingText = "") {
+      const shell = el("section", { class: "taskobs-shell", "aria-label": "任务观察台主画布" });
+      const scroll = el("div", { class: "taskobs-board-scroll" });
+      const canvas = el("div", { class: "taskobs-canvas" });
+      const filterKey = taskObservatoryActiveFilter(projectId);
+      const sortBasis = taskObservatorySortBasis(projectId);
+      const visible = taskObservatoryBuildDays(groups, filterKey, taskObservatoryVisibleLimit(projectId), sortBasis);
+
+      if (!visible.days.length) {
+        canvas.appendChild(taskObservatoryEmptyNote(loadingText || "当前筛选下暂无可展示任务主线。"));
+      } else {
+        visible.days.forEach((day) => {
+          const metrics = taskObservatoryDayMetrics(day.groups, filterKey);
+          const dayNode = el("section", { class: "taskobs-day" });
+          const head = el("div", { class: "taskobs-day-head" });
+          head.appendChild(el("div", { class: "taskobs-day-title", text: day.label }));
+          const meta = el("div", { class: "taskobs-day-meta" });
+          meta.appendChild(el("span", { class: "taskobs-day-kpi is-parent", text: "总任务 " + metrics.parentCount }));
+          meta.appendChild(el("span", { class: "taskobs-day-kpi", text: "子任务 " + metrics.childCount }));
+          meta.appendChild(el("span", { class: "taskobs-day-kpi", text: "已完成 " + metrics.doneCount }));
+          meta.appendChild(el("span", { class: "taskobs-day-kpi", text: "待完成 " + metrics.pendingCount }));
+          head.appendChild(meta);
+          dayNode.appendChild(head);
+
+          day.groups.forEach((group) => {
+            const visibleCards = taskObservatoryVisibleCards(group, filterKey);
+            if (!visibleCards.length) return;
+            const row = el("div", { class: "taskobs-row" });
+            const track = el("div", { class: "taskobs-track" });
+            track.appendChild(el("span", { class: "taskobs-track-dot" }));
+            row.appendChild(track);
+            const cards = el("div", { class: "taskobs-cards-row" });
+            visibleCards.forEach(({ row: taskRow, role }) => {
+              cards.appendChild(taskObservatoryCardNode(taskRow, role, group));
+            });
+            row.appendChild(cards);
+            dayNode.appendChild(row);
+          });
+          canvas.appendChild(dayNode);
+        });
+      }
+
+      scroll.appendChild(canvas);
+      shell.appendChild(scroll);
+      const loadWrap = el("div", { class: "taskobs-load-wrap" });
+      const loadBtn = el("button", {
+        class: "btn taskobs-load-more",
+        type: "button",
+        text: visible.hasMore
+          ? ("加载更早任务 (" + visible.visibleCount + "/" + visible.totalMatching + ")")
+          : "已加载全部旧任务",
+      });
+      loadBtn.disabled = !visible.hasMore;
+      loadBtn.addEventListener("click", () => {
+        if (loadBtn.disabled) return;
+        taskObservatoryIncreaseVisibleLimit(projectId);
+        render();
+      });
+      loadWrap.appendChild(loadBtn);
+      shell.appendChild(loadWrap);
+      return shell;
+    }
+
     function buildTaskModeList(listNode, barNode, mainMetaNode) {
       if (barNode) barNode.innerHTML = "";
       if (listNode) listNode.innerHTML = "";
-      const groupsAll = buildTaskGroups(STATE.project);
-      const lanes = taskLaneOrderList();
-      const moduleMode = normalizeTaskModule(STATE.taskModule);
-      const moduleLabel = moduleMode === "schedule" ? "排期" : (moduleMode === "org" ? "组织" : "任务");
-      const orgSnapshot = orgBoardSnapshot(STATE.project);
-      const orgRuntime = orgBoardRuntime(STATE.project);
-      const orgNodeCount = Array.isArray(orgSnapshot.nodes) ? orgSnapshot.nodes.length : 0;
-      const orgRelCount = Array.isArray(orgRuntime.runtime_relations) ? orgRuntime.runtime_relations.length : 0;
-
-      if (barNode) {
-        const modeRow = el("div", { class: "filterrow" });
-        modeRow.appendChild(chip("模块:" + moduleLabel, "muted"));
-        modeRow.appendChild(chip("任务总数:" + groupsAll.length, groupsAll.length ? "good" : "muted"));
-        modeRow.appendChild(chip("排期总数:" + projectScheduleItems(STATE.project).length, projectScheduleItems(STATE.project).length ? "good" : "muted"));
-        modeRow.appendChild(chip("组织节点:" + orgNodeCount, orgNodeCount ? "good" : "muted"));
-        modeRow.appendChild(chip("运行态关系:" + orgRelCount, orgRelCount ? "warn" : "muted"));
-        barNode.appendChild(modeRow);
-        if (moduleMode !== "org") {
-          const laneRow = el("div", { class: "filterrow" });
-          for (const lane of ["全部", ...lanes]) {
-            laneRow.appendChild(chipButton(lane, STATE.taskLane === lane, () => {
-              STATE.taskLane = lane;
-              setHash();
-              render();
-            }));
-          }
-          barNode.appendChild(laneRow);
-        }
-      }
-
-      if (moduleMode === "schedule") {
-        const queueCache = projectScheduleCache(STATE.project);
-        const queueStale = !queueCache || ((Date.now() - Number(queueCache.fetchedAtMs || 0)) > 5000);
-        if (queueStale && !PROJECT_SCHEDULE_UI.loadingByProject[String(STATE.project || "").trim()]) {
-          fetchProjectScheduleQueue(STATE.project, { maxAgeMs: 5000 }).then(() => render()).catch(() => {});
-        }
-        buildScheduleModeList(listNode, groupsAll, STATE.taskLane, mainMetaNode);
-        return;
-      }
-      if (moduleMode === "org") {
-        buildOrgModeList(listNode, mainMetaNode, { view: "org" });
+      const projectId = taskObservatoryProjectKey(STATE.project);
+      if (!projectId || projectId === "overview") {
+        if (listNode) listNode.appendChild(taskObservatoryEmptyNote("当前项目缺失，暂时无法载入任务观察台。"));
         return;
       }
 
-      const groups = STATE.taskLane === "全部"
-        ? groupsAll
-        : groupsAll.filter((g) => g.lane === STATE.taskLane);
+      const directory = Array.isArray(PCONV.sessionDirectoryByProject && PCONV.sessionDirectoryByProject[projectId])
+        ? PCONV.sessionDirectoryByProject[projectId].slice()
+        : [];
+      const meta = PCONV.sessionDirectoryMetaByProject && PCONV.sessionDirectoryMetaByProject[projectId]
+        ? PCONV.sessionDirectoryMetaByProject[projectId]
+        : null;
+      if (!directory.length && (!meta || !meta.liveLoaded)) {
+        taskObservatoryScheduleDirectoryLoad(projectId);
+        if (mainMetaNode) {
+          mainMetaNode.textContent = "view=任务面板 · scope=" + projectId + " · generated_at=" + DATA.generated_at + " · loading=session_directory";
+        }
+        if (listNode) listNode.appendChild(taskObservatoryEmptyNote("正在读取当前项目会话目录与 task_tracking 真源…", "is-loading"));
+        return;
+      }
+
+      const sessions = directory.slice().sort((a, b) => taskObservatorySessionSortValue(b) - taskObservatorySessionSortValue(a));
+      taskObservatoryScheduleDetailLoads(projectId, sessions, taskObservatoryVisibleLimit(projectId));
+      const groups = taskObservatoryBuildGroups(projectId, sessions);
+      taskObservatoryRenderBar(barNode, projectId, groups);
+
       if (mainMetaNode) {
-        mainMetaNode.textContent = "view=全项目任务聚合 · 总任务=" + groupsAll.length + " · 当前筛选=" + STATE.taskLane + " · generated_at=" + DATA.generated_at;
+        mainMetaNode.textContent = "view=任务面板 · 当前项目=" + projectId + " · 总任务=" + groups.length + " · 会话目录=" + sessions.length + " · generated_at=" + DATA.generated_at;
       }
+
       if (!groups.length) {
-        listNode.appendChild(el("div", { class: "hint", text: "当前条件下没有匹配的总任务。" }));
+        const noteText = meta && meta.error
+          ? ("任务观察台暂未形成可展示主线：" + String(meta.error || "").trim())
+          : "当前项目会话已载入，但暂未汇总出 current_task_ref 主线。";
+        if (listNode) listNode.appendChild(taskObservatoryBoardNode(projectId, [], noteText));
         return;
       }
 
-      for (const lane of lanes) {
-        const laneGroups = groups.filter((g) => g.lane === lane);
-        if (!laneGroups.length) continue;
-        let laneGroupsRender = laneGroups.slice();
-        let completedViewedCount = 0;
-        let completedUnviewedCount = 0;
-        if (lane === "已完成") {
-          laneGroupsRender = laneGroups
-            .slice()
-            .sort((a, b) => {
-              const aViewed = isTaskCompletedViewed(STATE.project, a && a.master && a.master.path, a && a.master && a.master.status);
-              const bViewed = isTaskCompletedViewed(STATE.project, b && b.master && b.master.path, b && b.master && b.master.status);
-              if (aViewed !== bViewed) return aViewed ? 1 : -1;
-              return Number(b.latestTs || -1) - Number(a.latestTs || -1);
-            });
-          for (const g of laneGroupsRender) {
-            const viewed = isTaskCompletedViewed(STATE.project, g && g.master && g.master.path, g && g.master && g.master.status);
-            if (viewed) completedViewedCount += 1;
-            else completedUnviewedCount += 1;
-          }
-        }
-        const laneSec = el("section", { class: "task-lane" + ((STATE.taskLaneCollapsed[lane] && (lane === "已完成" || lane === "已归档")) ? " collapsed" : "") });
-        const laneHead = el("div", { class: "task-lane-head" });
-        const laneTitle = el("div", { class: "task-lane-title" });
-        laneTitle.appendChild(chip(lane, taskLaneTone(lane) + (lane === "已归档" ? " archived-tag" : "")));
-        laneTitle.appendChild(el("span", { text: "总任务 " + laneGroupsRender.length }));
-        if (lane === "已完成") {
-          laneTitle.appendChild(chip("未看:" + completedUnviewedCount, completedUnviewedCount ? "warn" : "muted"));
-          laneTitle.appendChild(chip("已看:" + completedViewedCount, completedViewedCount ? "good" : "muted"));
-        }
-        laneHead.appendChild(laneTitle);
-        if (lane === "已完成" || lane === "已归档") {
-          const collapseBtn = el("button", { class: "btn", text: STATE.taskLaneCollapsed[lane] ? "展开" : "收起", type: "button" });
-          collapseBtn.addEventListener("click", (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            toggleTaskLaneCollapse(lane);
-          });
-          laneHead.appendChild(collapseBtn);
-        }
-        laneSec.appendChild(laneHead);
-
-        const laneBody = el("div", { class: "task-lane-body" });
-        for (const g of laneGroupsRender) {
-          const master = g.master || (g.children[0] || null);
-          if (!master) continue;
-          const selectedPath = String(STATE.selectedPath || "");
-          const masterPath = String(master.path || "");
-          const doneViewed = lane === "已完成"
-            ? isTaskCompletedViewed(STATE.project, masterPath, master && master.status)
-            : false;
-          const sourceMode = "active";
-          const visibleChildren = (Array.isArray(g.children) ? g.children : []).filter((child) => taskChildMatchesSource(child, sourceMode));
-          const hasChildSelected = Array.isArray(g.children)
-            ? g.children.some((c) => String((c && c.path) || "") === selectedPath)
-            : false;
-          const groupCard = el("div", {
-            class: "frow task-group-card" + ((selectedPath === masterPath || hasChildSelected) ? " active" : ""),
-            "data-path": masterPath,
-          });
-          if (lane === "已归档") groupCard.classList.add("is-archived");
-          if (lane === "已完成" && !doneViewed) groupCard.classList.add("is-completed-unviewed");
-          const scheduled = isTaskScheduledByItem(master);
-          if (scheduled) groupCard.classList.add("is-scheduled");
-          bindTaskScheduleDragSource(groupCard, master);
-          const head = el("div", { class: "task-group-head" });
-          head.appendChild(buildItemTitleNode(master, "t"));
-          const headOps = el("div", { class: "frow-title-ops" });
-          if (lane === "已完成") {
-            const viewedBtn = el("button", {
-              class: "btn" + (doneViewed ? " btn-soft-good" : ""),
-              type: "button",
-              text: doneViewed ? "已查看" : "标记已查看",
-              title: doneViewed ? "已标记为已查看，点击可撤销" : "将该完成任务标记为已查看",
-            });
-            viewedBtn.addEventListener("click", (e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              setTaskCompletedViewed(STATE.project, masterPath, !doneViewed);
-              render();
-            });
-            headOps.appendChild(viewedBtn);
-          }
-          const scheduleBtn = createTaskScheduleToggleBtn(master, true);
-          if (scheduleBtn) headOps.appendChild(scheduleBtn);
-          const pushBtn = createTaskPushEntryBtn(master, true);
-          if (pushBtn) headOps.appendChild(pushBtn);
-          head.appendChild(headOps);
-          groupCard.appendChild(head);
-
-          const statusMeta = el("div", { class: "m" });
-          const masterFlags = taskStatusFlags(master);
-          statusMeta.appendChild(chip("主任务状态:" + g.masterBucket, taskPrimaryTone(g.masterBucket)));
-          if (masterFlags.supervised) statusMeta.appendChild(chip("关注", "bad"));
-          if (masterFlags.blocked) statusMeta.appendChild(chip("阻塞", "bad"));
-          if (lane === "已完成") {
-            statusMeta.appendChild(chip(doneViewed ? "已查看" : "未查看", doneViewed ? "good" : "warn"));
-          }
-          statusMeta.appendChild(chip("所属通道:" + resolveTaskGroupChannel(g), "muted"));
-          statusMeta.appendChild(chip("子任务总数:" + g.childTotal, "muted"));
-          statusMeta.appendChild(chip("子任务显示:" + visibleChildren.length + "/" + g.children.length, "muted"));
-          const order = ["进行中", "待办", "待验收", "已完成", "暂缓"];
-          for (const k of order) {
-            const c = Number(g.childCounts[k] || 0);
-            if (!c) continue;
-            statusMeta.appendChild(chip(k + ":" + c, toneForBucket(k)));
-          }
-          if (g.latestAt) statusMeta.appendChild(chip("更新:" + g.latestAt, "muted"));
-          groupCard.appendChild(statusMeta);
-
-          const summaryText = visibleChildren.length
-            ? taskGroupSummaryText(g, visibleChildren)
-            : "当前暂无可展示子任务。";
-          groupCard.appendChild(el("div", { class: "task-group-summary", text: summaryText }));
-
-          const expanded = !!STATE.taskGroupExpanded[g.key];
-          const foldBtn = el("button", { class: "btn", type: "button", text: expanded ? "收起子任务" : ("展开子任务（" + visibleChildren.length + "）") });
-          if (!visibleChildren.length) foldBtn.disabled = true;
-          foldBtn.addEventListener("click", (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            toggleTaskGroupExpanded(g.key);
-          });
-          groupCard.appendChild(foldBtn);
-
-          if (expanded) {
-            const childWrap = el("div", { class: "task-group-children" });
-            if (!visibleChildren.length) {
-              childWrap.appendChild(el("div", { class: "task-group-empty", text: "当前筛选条件下暂无子任务。" }));
-            }
-            for (const child of visibleChildren) {
-              const childPath = String((child && child.path) || "");
-              const row = el("div", {
-                class: "task-group-child" + (selectedPath === childPath ? " active" : ""),
-                "data-path": childPath,
-              });
-              const left = el("div", { style: "min-width:0;flex:1;" });
-              left.appendChild(el("div", { class: "task-group-child-title", text: shortTitle(child.title || "") }));
-              const cm = el("div", { class: "task-group-child-meta" });
-              cm.appendChild(chip(bucketKeyForStatus(child.status), toneForBucket(bucketKeyForStatus(child.status))));
-              if (child.channel) cm.appendChild(chip(child.channel, "muted"));
-              if (child.updated_at) cm.appendChild(chip("更新:" + child.updated_at, "muted"));
-              left.appendChild(cm);
-              row.appendChild(left);
-              const right = el("div", { class: "frow-title-ops" });
-              const cpb = createTaskPushEntryBtn(child, true);
-              if (cpb) right.appendChild(cpb);
-              row.appendChild(right);
-              row.addEventListener("click", (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                setSelectedPath(child.path);
-              });
-              childWrap.appendChild(row);
-            }
-            groupCard.appendChild(childWrap);
-          }
-
-          bindCardSelectSemantics(groupCard, () => {
-            setSelectedPath(master.path);
-          });
-          laneBody.appendChild(groupCard);
-        }
-        laneSec.appendChild(laneBody);
-        listNode.appendChild(laneSec);
-      }
+      if (listNode) listNode.appendChild(taskObservatoryBoardNode(projectId, groups));
     }

@@ -536,6 +536,8 @@ def update_project_config_response(
     heartbeat_runtime: Any,
     store: Any,
     default_inspection_targets: list[str],
+    clear_dashboard_cfg_cache: Callable[[], None] | None = None,
+    invalidate_sessions_payload_cache: Callable[[str], None] | None = None,
 ) -> tuple[int, dict[str, Any]]:
     pid = str(project_id or "").strip()
     if not pid:
@@ -1022,6 +1024,17 @@ def update_project_config_response(
         )
     except Exception as e:
         return 400, {"error": str(e)}
+
+    if callable(clear_dashboard_cfg_cache):
+        try:
+            clear_dashboard_cfg_cache()
+        except Exception:
+            pass
+    if callable(invalidate_sessions_payload_cache):
+        try:
+            invalidate_sessions_payload_cache(pid)
+        except Exception:
+            pass
 
     status = (
         project_scheduler_runtime.sync_project(pid)

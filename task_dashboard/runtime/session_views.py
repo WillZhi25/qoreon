@@ -2,9 +2,128 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any, Callable
 
 from task_dashboard.runtime.session_display_state import build_session_display_fields
+from task_dashboard.runtime.session_task_tracking import (
+    build_prefetched_session_run_map,
+    build_session_task_tracking,
+)
+
+
+def _safe_heartbeat_task_id(item: dict[str, Any], index: int) -> str:
+    task_id = str(
+        item.get("heartbeat_task_id")
+        or item.get("heartbeatTaskId")
+        or ""
+    ).strip()
+    if task_id:
+        return task_id
+    return f"__heartbeat_task_{index}"
+
+
+def _build_heartbeat_task_map(tasks: Any) -> dict[str, dict[str, Any]]:
+    rows = tasks if isinstance(tasks, list) else []
+    out: dict[str, dict[str, Any]] = {}
+    for index, raw in enumerate(rows):
+        if not isinstance(raw, dict):
+            continue
+        out[_safe_heartbeat_task_id(raw, index)] = dict(raw)
+    return out
+
+
+def _heartbeat_summary_from_task_map(task_map: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    total_count = len(task_map)
+    enabled_count = 0
+    ready_count = 0
+    for item in task_map.values():
+        enabled = bool(item.get("enabled"))
+        ready = bool(item.get("ready"))
+        if enabled:
+            enabled_count += 1
+        if enabled and ready:
+            ready_count += 1
+    return {
+        "total_count": total_count,
+        "enabled_count": enabled_count,
+        "ready_count": ready_count,
+        "has_enabled_tasks": enabled_count > 0,
+    }
+
+
+def _build_project_assigned_heartbeat_task_map_by_session(
+    *,
+    project_id: str,
+    heartbeat_runtime: Any,
+) -> dict[str, dict[str, dict[str, Any]]] | None:
+    pid = str(project_id or "").strip()
+    if heartbeat_runtime is None or not pid:
+        return None
+    try:
+        payload = heartbeat_runtime.list_tasks(pid)
+    except Exception:
+        return None
+    items = payload.get("items") if isinstance(payload, dict) else []
+    out: dict[str, dict[str, dict[str, Any]]] = {}
+    for index, raw in enumerate(items if isinstance(items, list) else []):
+        if not isinstance(raw, dict):
+            continue
+        session_id = str(
+            raw.get("session_id")
+            or raw.get("sessionId")
+            or ""
+        ).strip()
+        if not session_id:
+            continue
+        bucket = out.setdefault(session_id, {})
+        bucket[_safe_heartbeat_task_id(raw, index)] = dict(raw)
+    return out
+
+
+def _build_session_assigned_heartbeat_task_map_by_session(
+    *,
+    project_id: str,
+    heartbeat_runtime: Any,
+    load_session_heartbeat_config: Callable[[dict[str, Any]], dict[str, Any]],
+) -> dict[str, dict[str, dict[str, Any]]] | None:
+    pid = str(project_id or "").strip()
+    session_store = getattr(heartbeat_runtime, "session_store", None)
+    list_sessions = getattr(session_store, "list_sessions", None)
+    if heartbeat_runtime is None or not pid or not callable(list_sessions):
+        return None
+    try:
+        sessions = list_sessions(pid)
+    except Exception:
+        return None
+    out: dict[str, dict[str, dict[str, Any]]] = {}
+    for session in sessions if isinstance(sessions, list) else []:
+        if not isinstance(session, dict):
+            continue
+        source_session_id = str(
+            session.get("id")
+            or session.get("session_id")
+            or session.get("sessionId")
+            or ""
+        ).strip()
+        heartbeat_cfg = load_session_heartbeat_config(session)
+        tasks = heartbeat_cfg.get("tasks") if isinstance(heartbeat_cfg, dict) else []
+        for index, raw in enumerate(tasks if isinstance(tasks, list) else []):
+            if not isinstance(raw, dict):
+                continue
+            item = dict(raw)
+            target_session_id = str(
+                item.get("session_id")
+                or item.get("sessionId")
+                or source_session_id
+            ).strip()
+            if not target_session_id:
+                continue
+            item.setdefault("source_scope", "session")
+            item.setdefault("source_session_id", source_session_id)
+            bucket = out.setdefault(target_session_id, {})
+            bucket[_safe_heartbeat_task_id(item, index)] = item
+    return out
 
 
 def apply_session_context_rows(
@@ -26,6 +145,112 @@ def apply_session_context_rows(
             )
         )
     return rows
+
+
+def apply_session_heartbeat_summary_rows(
+    sessions: list[dict[str, Any]],
+    *,
+    project_id: str,
+    heartbeat_runtime: Any,
+    load_session_heartbeat_config: Callable[[dict[str, Any]], dict[str, Any]],
+    heartbeat_summary_payload: Callable[[Any], Any],
+) -> list[dict[str, Any]]:
+    project_assigned_task_map_by_session = _build_project_assigned_heartbeat_task_map_by_session(
+        project_id=project_id,
+        heartbeat_runtime=heartbeat_runtime,
+    )
+    session_assigned_task_map_by_session = _build_session_assigned_heartbeat_task_map_by_session(
+        project_id=project_id,
+        heartbeat_runtime=heartbeat_runtime,
+        load_session_heartbeat_config=load_session_heartbeat_config,
+    )
+    batch_summary_available = (
+        project_assigned_task_map_by_session is not None
+        and session_assigned_task_map_by_session is not None
+    )
+    rows: list[dict[str, Any]] = []
+    for row in sessions:
+        if not isinstance(row, dict):
+            continue
+        item = dict(row)
+        session_id = str(
+            item.get("id")
+            or item.get("session_id")
+            or item.get("sessionId")
+            or ""
+        ).strip()
+        heartbeat_cfg = load_session_heartbeat_config(item)
+        task_map = {}
+        if batch_summary_available:
+            task_map = dict(project_assigned_task_map_by_session.get(session_id) or {})
+            task_map.update(session_assigned_task_map_by_session.get(session_id) or {})
+            item["heartbeat_summary"] = _heartbeat_summary_from_task_map(task_map)
+        else:
+            item["heartbeat_summary"] = heartbeat_summary_payload(heartbeat_cfg)
+        rows.append(item)
+    return rows
+
+
+def apply_session_task_tracking_rows(
+    sessions: list[dict[str, Any]],
+    *,
+    project_id: str,
+    store: Any,
+) -> list[dict[str, Any]]:
+    pid = str(project_id or "").strip()
+    if not pid:
+        return sessions
+    tracking_run_limit = _session_list_task_tracking_run_limit()
+    session_ids = [
+        str(
+            row.get("id")
+            or row.get("session_id")
+            or row.get("sessionId")
+            or ""
+        ).strip()
+        for row in sessions
+        if isinstance(row, dict)
+    ]
+    prefetched_runs_by_session = build_prefetched_session_run_map(
+        store=store,
+        project_id=pid,
+        session_ids=session_ids,
+        per_session_limit=tracking_run_limit,
+    )
+    rows: list[dict[str, Any]] = []
+    for row in sessions:
+        if not isinstance(row, dict):
+            continue
+        item = dict(row)
+        session_id = str(
+            item.get("id")
+            or item.get("session_id")
+            or item.get("sessionId")
+            or ""
+        ).strip()
+        runtime_state = dict(item.get("runtime_state") or {}) if isinstance(item.get("runtime_state"), dict) else {}
+        item["task_tracking"] = build_session_task_tracking(
+            session=item,
+            store=store,
+            project_id=pid,
+            session_id=session_id,
+            runtime_state=runtime_state,
+            run_limit=tracking_run_limit,
+            runs=prefetched_runs_by_session.get(session_id),
+        )
+        rows.append(item)
+    return rows
+
+
+def _session_list_task_tracking_run_limit() -> int:
+    raw = str(os.environ.get("CCB_SESSION_LIST_TASK_TRACKING_RUN_LIMIT") or "").strip()
+    if raw:
+        try:
+            value = int(raw)
+            return max(6, min(value, 80))
+        except Exception:
+            pass
+    return 24
 
 
 def build_session_detail_payload(
@@ -56,6 +281,13 @@ def build_session_detail_payload(
     runtime_state = build_session_runtime_state_for_row(enriched, agg or {})
     enriched["runtime_state"] = runtime_state
     enriched.update(build_session_display_fields(runtime_state, agg or {}))
+    enriched["task_tracking"] = build_session_task_tracking(
+        session=enriched,
+        store=store,
+        project_id=project_id,
+        session_id=session_id,
+        runtime_state=runtime_state,
+    )
 
     heartbeat_cfg = load_session_heartbeat_config(enriched)
     heartbeat_payload = {

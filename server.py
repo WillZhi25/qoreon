@@ -121,11 +121,15 @@ from task_dashboard.runtime.session_routes import (
     list_sessions_response as runtime_list_sessions_response,
     get_session_binding_response as runtime_get_session_binding_response,
     list_session_heartbeat_task_history_route_response as runtime_list_session_heartbeat_task_history_route_response,
+    _invalidate_sessions_payload_cache as runtime_invalidate_sessions_payload_cache,
 )
 from task_dashboard.runtime.run_routes import (
     get_run_detail_response as runtime_get_run_detail_response,
     list_runs_response as runtime_list_runs_response,
     perform_run_action_response as runtime_perform_run_action_response,
+)
+from task_dashboard.runtime.run_detail_fields import (
+    extract_terminal_message_from_file as runtime_extract_terminal_message_from_file,
 )
 from task_dashboard.sender_contract import normalize_sender_fields
 
@@ -240,6 +244,8 @@ _AUTO_INSPECTION_PREVIEW_CACHE_LOCK = threading.Lock()
 _AUTO_INSPECTION_PREVIEW_CACHE: dict[str, dict[str, Any]] = {}
 _SESSION_RUNTIME_INDEX_CACHE_LOCK = threading.Lock()
 _SESSION_RUNTIME_INDEX_CACHE: dict[str, dict[str, Any]] = {}
+_SESSION_RUNTIME_INDEX_INFLIGHT: dict[str, dict[str, Any]] = {}
+_SESSION_RUNTIME_INDEX_INVALIDATED_AT: dict[str, float] = {}
 _SESSION_EXTERNAL_BUSY_CACHE_LOCK = threading.Lock()
 _SESSION_EXTERNAL_BUSY_CACHE: dict[str, dict[str, Any]] = {}
 _SESSION_ARCHIVE_SESSION_SUMMARY_CACHE: dict[str, dict[str, Any]] = {}
@@ -415,6 +421,9 @@ def _build_session_health_payload(
     store: Any,
     environment_name: str,
     worktree_root: Any,
+    heartbeat_runtime: Any,
+    load_session_heartbeat_config: Callable[[dict[str, Any]], dict[str, Any]],
+    heartbeat_summary_payload: Callable[[Any], Any],
 ) -> dict[str, Any]:
     sessions_payload = runtime_build_sessions_list_payload(
         session_store=session_store,
@@ -427,6 +436,9 @@ def _build_session_health_payload(
         apply_session_context_rows=runtime_apply_session_context_rows,
         apply_session_work_context=_apply_session_work_context,
         attach_runtime_state_to_sessions=_attach_runtime_state_to_sessions,
+        heartbeat_runtime=heartbeat_runtime,
+        load_session_heartbeat_config=load_session_heartbeat_config,
+        heartbeat_summary_payload=heartbeat_summary_payload,
     )
     project_cfg = _find_project_cfg(project_id) or {}
     session_health_cfg = load_project_session_health_config(project_id)
@@ -454,6 +466,9 @@ def _build_session_health_payload(
                 "workdir": str(row.get("workdir") or "").strip(),
                 "project_execution_context": dict(row.get("project_execution_context") or {})
                 if isinstance(row.get("project_execution_context"), dict)
+                else {},
+                "task_tracking": dict(row.get("task_tracking") or {})
+                if isinstance(row.get("task_tracking"), dict)
                 else {},
                 "is_primary": bool(row.get("is_primary")),
                 "session_role": str(row.get("session_role") or "").strip(),
@@ -697,8 +712,11 @@ def _scan_process_table_rows() -> list[tuple[int, str]]:
     try:
         env = dict(os.environ)
         env["LC_ALL"] = "C"
+        # Use `-ww` to avoid truncating long CLI resume commands; otherwise
+        # terminal-bound orphan rows may lose their `-o <run>.last.txt` segment
+        # and get misclassified as real external busy processes.
         proc = subprocess.run(
-            ["ps", "-axo", "pid=,command="],
+            ["ps", "-axww", "-o", "pid=,command="],
             capture_output=True,
             text=True,
             timeout=2.0,
@@ -779,6 +797,54 @@ def _run_busy_cmd_fallback_matches(cmd: str, run_id: str, cli_type: str) -> bool
     return False
 
 
+_RUN_OUTPUT_FILE_TOKEN_RE = re.compile(r"([A-Za-z0-9][A-Za-z0-9._-]{5,120})\.last\.txt")
+
+
+def _extract_run_id_from_busy_cmd(cmd: str, cli_type: str) -> str:
+    """Best-effort extract run id from a CLI process row bound to a run output file."""
+    text = str(cmd or "").replace("\\012", " ")
+    cli_t = str(cli_type or "codex").strip().lower()
+    if cli_t == "codex":
+        if re.search(r"(?:^|\s)-o(?:\s|=)", text) is None:
+            return ""
+    elif cli_t == "trae":
+        if re.search(r"(?:^|\s)--trajectory-file(?:\s|=)", text) is None:
+            return ""
+    else:
+        return ""
+    matches = list(_RUN_OUTPUT_FILE_TOKEN_RE.finditer(text))
+    if not matches:
+        return ""
+    return str(matches[-1].group(1) or "").strip()
+
+
+def _terminal_run_bound_session_process(
+    store: Any,
+    session_id: str,
+    cmd: str,
+    *,
+    cli_type: str = "codex",
+) -> bool:
+    """Return True when a matched session process is bound to a run already in terminal state."""
+    if store is None or not hasattr(store, "load_meta"):
+        return False
+    sid = str(session_id or "").strip()
+    if not sid:
+        return False
+    run_id = _extract_run_id_from_busy_cmd(cmd, cli_type=cli_type)
+    if not run_id:
+        return False
+    try:
+        meta = store.load_meta(run_id)
+    except Exception:
+        meta = None
+    if not isinstance(meta, dict):
+        return False
+    if str(meta.get("sessionId") or "").strip() != sid:
+        return False
+    return str(meta.get("status") or "").strip().lower() in {"done", "error"}
+
+
 def _session_busy_cmd_matches(cmd: str, session_id: str, cli_type: str) -> bool:
     """Match session id only when it appears in the real CLI session argument slot."""
     text = str(cmd or "").replace("\\012", " ")
@@ -825,6 +891,35 @@ def _scan_session_busy_rows(
     return out
 
 
+def _scan_session_busy_rows_effective(
+    store: Any,
+    session_id: str,
+    cli_type: str = "codex",
+    rows: Optional[list[tuple[int, str]]] = None,
+) -> list[tuple[int, str]]:
+    """Filter matched session processes, ignoring rows bound to terminal runs."""
+    sid = str(session_id or "").strip()
+    cli_t = str(cli_type or "codex").strip() or "codex"
+    matched = _scan_session_busy_rows(sid, cli_type=cli_t, rows=rows)
+    if not matched or store is None or not hasattr(store, "load_meta"):
+        return matched
+    out: list[tuple[int, str]] = []
+    for pid, cmd in matched:
+        if _terminal_run_bound_session_process(store, sid, cmd, cli_type=cli_t):
+            continue
+        out.append((int(pid), str(cmd)))
+    return out
+
+
+def _session_process_busy_effective(
+    store: Any,
+    session_id: str,
+    cli_type: str = "codex",
+    rows: Optional[list[tuple[int, str]]] = None,
+) -> bool:
+    return bool(_scan_session_busy_rows_effective(store, session_id, cli_type=cli_type, rows=rows))
+
+
 def _fallback_log_from_meta(meta: dict[str, Any]) -> str:
     err = str(meta.get("error") or "").strip()
     if not err:
@@ -837,6 +932,51 @@ def _fallback_log_from_meta(meta: dict[str, Any]) -> str:
         f"[system] finished_at={meta.get('finishedAt')}",
     ]
     return "\n".join(parts)
+
+
+def _run_meta_related_session_ids(meta: Any) -> set[str]:
+    row = meta if isinstance(meta, dict) else {}
+    related: set[str] = set()
+
+    def _add(value: Any) -> None:
+        text = _safe_text(value, 80).strip()
+        if text:
+            related.add(text)
+
+    def _add_ref(payload: Any) -> None:
+        if not isinstance(payload, dict):
+            return
+        _add(payload.get("session_id") if "session_id" in payload else payload.get("sessionId"))
+
+    _add(row.get("sessionId") if "sessionId" in row else row.get("session_id"))
+    _add(row.get("target_session_id") if "target_session_id" in row else row.get("targetSessionId"))
+    _add(row.get("source_session_id") if "source_session_id" in row else row.get("sourceSessionId"))
+
+    for key in ("source_ref", "target_ref", "callback_to", "sender_agent_ref"):
+        _add_ref(row.get(key))
+
+    communication_view = row.get("communication_view")
+    if isinstance(communication_view, dict):
+        _add(
+            communication_view.get("target_session_id")
+            if "target_session_id" in communication_view
+            else communication_view.get("targetSessionId")
+        )
+        _add(
+            communication_view.get("source_session_id")
+            if "source_session_id" in communication_view
+            else communication_view.get("sourceSessionId")
+        )
+
+    technical = row.get("technical")
+    technical_route = technical.get("route_resolution") if isinstance(technical, dict) else None
+    for route in (row.get("route_resolution"), technical_route):
+        if not isinstance(route, dict):
+            continue
+        for key in ("final_target", "resolved_target", "original_callback_to", "callback_to"):
+            _add_ref(route.get(key))
+
+    return related
 
 
 def _resolve_runs_static_target(runs_root: Path, request_path: str) -> Optional[Path]:
@@ -1336,10 +1476,23 @@ def _parse_adapter_output_line(adapter_cls: Any, payload: str) -> Optional[dict[
 
 
 def _error_hint(err: str) -> str:
-    raw = str(err or "").strip()
+    raw = _normalize_cli_runtime_text(err)
     e = raw.lower()
     if not e:
         return ""
+    perm_kind, perm_target = _extract_permission_denied_context(raw)
+    if perm_kind or "permission denied" in e:
+        target_desc = f"“{perm_target}”" if perm_target else "目标目录或工具调用"
+        if perm_kind == "external_directory":
+            return (
+                f"CLI 访问工作区外目录被拒绝：{target_desc}。"
+                "当前任务引用了外部项目路径，但运行时未放行该目录；"
+                "请把目标目录纳入当前工作区/镜像目录，或在对应 CLI 侧放开该目录访问后重试。"
+            )
+        return (
+            f"CLI 工具权限被拒绝：{target_desc}。"
+            "请检查该 CLI 的目录/工具调用授权设置，必要时调整任务范围后重试。"
+        )
     if "no such file or directory" in e:
         missing_path = ""
         m = re.search(r"No such file or directory:\s*['\"]([^'\"]+)['\"]", raw, re.IGNORECASE)
@@ -1364,6 +1517,92 @@ def _error_hint(err: str) -> str:
         return "进程中断：常见于服务重启或运行进程退出。可重试或回收结果。"
     if _is_transient_network_error(e):
         return "网络波动：系统已做自动重试但仍失败。建议稍后重试，或先用“回收结果”收口已完成内容。"
+    return ""
+
+
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+
+
+def _normalize_cli_runtime_text(text: Any) -> str:
+    raw = "" if text is None else str(text)
+    if not raw:
+        return ""
+    stripped = _ANSI_ESCAPE_RE.sub("", raw)
+    return stripped.replace("\r\n", "\n").replace("\r", "\n").strip()
+
+
+def _extract_permission_denied_context(text: Any) -> tuple[str, str]:
+    raw = _normalize_cli_runtime_text(text)
+    if not raw:
+        return "", ""
+    lowered = raw.lower()
+    denied_match = re.search(r"([a-z0-9_]+)\s+permission denied(?::\s*(.+))?$", raw, re.IGNORECASE)
+    if denied_match:
+        kind = str(denied_match.group(1) or "").strip().lower()
+        target = str(denied_match.group(2) or "").strip()
+        return kind, target
+    explicit_reject = (
+        "the user rejected permission to use this specific tool call" in lowered
+        or "permission denied" in lowered
+        or "auto-rejecting" in lowered
+    )
+    match = re.search(r"permission requested:\s*([a-z0-9_]+)\s*\(([^)]+)\)", raw, re.IGNORECASE)
+    if not match:
+        return ("permission", "") if explicit_reject else ("", "")
+    if not explicit_reject:
+        return "", ""
+    kind = str(match.group(1) or "").strip().lower()
+    target = str(match.group(2) or "").strip()
+    return kind, target
+
+
+def _extract_permission_denied_error(text: Any) -> str:
+    kind, target = _extract_permission_denied_context(text)
+    if not kind:
+        return ""
+    if kind == "permission" and not target:
+        return "permission denied"
+    if target:
+        return f"{kind} permission denied: {target}"
+    return f"{kind} permission denied"
+
+
+def _detect_terminal_text_cli_incomplete_error(
+    cli_type: str,
+    *,
+    log_path: Path | str | None = None,
+    log_text: str = "",
+) -> str:
+    cli = str(cli_type or "").strip().lower()
+    if cli not in {"claude", "opencode"}:
+        return ""
+    text = _normalize_cli_runtime_text(log_text)
+    if not text and log_path:
+        try:
+            text = _normalize_cli_runtime_text(_tail_text(Path(log_path), max_chars=24_000))
+        except Exception:
+            text = ""
+    if not text:
+        return ""
+
+    pending_error = ""
+    saw_stdout_after_error = False
+    for raw_line in text.splitlines():
+        line = _normalize_cli_runtime_text(raw_line)
+        if not line:
+            continue
+        if line.startswith("[stdout] "):
+            payload = str(line[len("[stdout] ") :]).strip()
+            if payload and pending_error:
+                saw_stdout_after_error = True
+            continue
+        err = _extract_permission_denied_error(line)
+        if err:
+            if not pending_error or pending_error == "permission denied":
+                pending_error = err
+            saw_stdout_after_error = False
+    if pending_error and not saw_stdout_after_error:
+        return pending_error
     return ""
 
 
@@ -1525,9 +1764,10 @@ def _is_auth_error(text: str) -> bool:
         "unauthorized",
         "www_authenticate_header",
         "forbidden",
-        "401",
     ]
-    return any(p in e for p in patterns)
+    if any(p in e for p in patterns):
+        return True
+    return re.search(r"\b401\b", e) is not None
 
 
 def _server_token() -> str:
@@ -1537,11 +1777,12 @@ def _server_token() -> str:
 def _dashboard_build_paths() -> dict[str, Path]:
     """Resolve static dashboard build script and output paths."""
     repo_root = _repo_root()
-    task_dir = repo_root / "项目管理-小秘书" / "项目看板" / "task-dashboard"
+    task_dir = Path(__file__).resolve().parent
     script = task_dir / "build_project_task_dashboard.py"
     out_task = task_dir / "dist" / "project-task-dashboard.html"
     out_overview = task_dir / "dist" / "project-overview-dashboard.html"
     out_communication = task_dir / "dist" / "project-communication-audit.html"
+    out_message_risk_dashboard = task_dir / "dist" / "project-message-risk-dashboard.html"
     out_status_report = task_dir / "dist" / "project-status-report.html"
     return {
         "repo_root": repo_root,
@@ -1549,6 +1790,7 @@ def _dashboard_build_paths() -> dict[str, Path]:
         "out_task": out_task,
         "out_overview": out_overview,
         "out_communication": out_communication,
+        "out_message_risk_dashboard": out_message_risk_dashboard,
         "out_status_report": out_status_report,
     }
 
@@ -1560,20 +1802,9 @@ def _rebuild_dashboard_static(timeout_s: int = 120) -> dict[str, Any]:
     if not script.exists():
         raise RuntimeError(f"build script not found: {script}")
 
-    repo_root = paths["repo_root"]
     cmd = [
         str(sys.executable or "python3"),
         str(script),
-        "--root",
-        str(repo_root),
-        "--out-task",
-        "项目管理-小秘书/项目看板/task-dashboard/dist/project-task-dashboard.html",
-        "--out-overview",
-        "项目管理-小秘书/项目看板/task-dashboard/dist/project-overview-dashboard.html",
-        "--out-communication",
-        "项目管理-小秘书/项目看板/task-dashboard/dist/project-communication-audit.html",
-        "--out-status-report",
-        "项目管理-小秘书/项目看板/task-dashboard/dist/project-status-report.html",
     ]
     started = time.time()
     proc = subprocess.run(
@@ -2480,7 +2711,7 @@ def _resolve_project_task_root(project_id: str) -> Optional[Path]:
     # task_dashboard should still be able to locate its local 任务规划目录.
     script_dir = Path(__file__).resolve().parent
     norm_rel = _normalize_task_path_identity(task_root_rel)
-    marker = "task-dashboard/"
+    marker = f"{script_dir.name}/"
     if norm_rel:
         idx = norm_rel.find(marker)
         if idx >= 0:
@@ -2599,10 +2830,7 @@ def _repair_project_prefixed_path(path: Path) -> Path:
     if not parts:
         return path
     for idx in range(1, len(parts)):
-        parent_name = parts[idx - 1]
         name = parts[idx]
-        if parent_name != "项目管理-小秘书":
-            continue
         if not name or name.startswith("【项目】"):
             continue
         try:
@@ -2635,10 +2863,6 @@ def _resolve_allowed_fs_path(path_raw: str) -> Path:
             pr = repaired
         else:
             raise FileNotFoundError("path not found")
-    allowed_roots = _reveal_allowed_roots() or [ws_root]
-    allowed = any((pr == root or root in pr.parents) for root in allowed_roots)
-    if not allowed:
-        raise PermissionError("path not allowed")
     return pr
 
 
@@ -2989,7 +3213,7 @@ class RunScheduler:
             if not q:
                 self._q.pop(session_id, None)
             return
-        if _session_process_busy(session_id, cli_type=cli_type):
+        if _session_process_busy_effective(self.store, session_id, cli_type=cli_type):
             busy_timed_out = False
             if meta is not None and hasattr(self.store, "save_meta"):
                 changed = False
@@ -3241,9 +3465,6 @@ def create_cli_session(
     spawn_cmd = list(spawn_bundle.get("cmd") or cmd)
     spawn_cwd = Path(spawn_bundle.get("spawn_cwd") or run_cwd)
     spawn_env = dict(spawn_bundle.get("spawn_env") or os.environ)
-    if cli_type == "codex" and str(spawn_bundle.get("mode") or "") == "codex_ascii_workspace_mirror":
-        # 创建会话时仍优先在真实项目目录执行，避免镜像目录下本地 wrapper 解析不稳定。
-        spawn_cwd = run_cwd
 
     try:
         proc = subprocess.run(
@@ -3419,6 +3640,10 @@ class RunStore:
         self.archive_dir = self.runs_dir / "archive"
         self.hot_dir.mkdir(parents=True, exist_ok=True)
         self.archive_dir.mkdir(parents=True, exist_ok=True)
+        self._live_run_index_lock = threading.Lock()
+        self._live_run_index_ready = False
+        self._live_run_index_by_id: dict[str, dict[str, Any]] = {}
+        self._live_run_index_order: list[str] = []
 
     def _legacy_paths(self, run_id: str) -> dict[str, Path]:
         base = self.runs_dir / run_id
@@ -3478,6 +3703,79 @@ class RunStore:
                 paths.append(path)
         return paths
 
+    def _build_live_run_index(self) -> tuple[dict[str, dict[str, Any]], list[str]]:
+        by_id: dict[str, dict[str, Any]] = {}
+        ordered_ids: list[str] = []
+        for path in sorted(self._iter_live_meta_paths(), key=lambda x: x.stat().st_mtime, reverse=True):
+            try:
+                meta = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if not isinstance(meta, dict):
+                continue
+            run_id = str(meta.get("id") or "").strip()
+            if not run_id or run_id in by_id:
+                continue
+            by_id[run_id] = dict(meta)
+            ordered_ids.append(run_id)
+        return by_id, ordered_ids
+
+    def _ensure_live_run_index_ready(self) -> None:
+        with self._live_run_index_lock:
+            if self._live_run_index_ready:
+                return
+        by_id, ordered_ids = self._build_live_run_index()
+        with self._live_run_index_lock:
+            if self._live_run_index_ready:
+                return
+            self._live_run_index_by_id = by_id
+            self._live_run_index_order = ordered_ids
+            self._live_run_index_ready = True
+
+    def _snapshot_live_run_index(self) -> list[dict[str, Any]]:
+        self._ensure_live_run_index_ready()
+        with self._live_run_index_lock:
+            return [
+                dict(meta)
+                for run_id in self._live_run_index_order
+                for meta in [self._live_run_index_by_id.get(run_id) or {}]
+                if meta
+            ]
+
+    def _update_live_run_index_entry(self, run_id: str, meta: dict[str, Any]) -> None:
+        if not run_id:
+            return
+        with self._live_run_index_lock:
+            if not self._live_run_index_ready:
+                return
+            self._live_run_index_by_id[run_id] = dict(meta)
+            try:
+                self._live_run_index_order.remove(run_id)
+            except ValueError:
+                pass
+            self._live_run_index_order.insert(0, run_id)
+
+    def _remove_live_run_index_entry(self, run_id: str) -> None:
+        if not run_id:
+            return
+        with self._live_run_index_lock:
+            if not self._live_run_index_ready:
+                return
+            self._live_run_index_by_id.pop(run_id, None)
+            try:
+                self._live_run_index_order.remove(run_id)
+            except ValueError:
+                pass
+
+    def _run_sort_key(self, meta: dict[str, Any]) -> tuple[float, str]:
+        row = meta if isinstance(meta, dict) else {}
+        created_ts = _parse_rfc3339_ts(str(row.get("createdAt") or "").strip())
+        if created_ts <= 0:
+            started_ts = _parse_rfc3339_ts(str(row.get("startedAt") or "").strip())
+            finished_ts = _parse_rfc3339_ts(str(row.get("finishedAt") or "").strip())
+            created_ts = max(created_ts, started_ts, finished_ts)
+        return (created_ts, str(row.get("id") or ""))
+
     def _find_meta_path(self, run_id: str) -> Optional[Path]:
         hot = self._hot_paths(run_id)["meta"]
         if hot.exists():
@@ -3521,15 +3819,10 @@ class RunStore:
             legacy_meta_path = self._legacy_paths(run_id)["meta"]
             if not legacy_meta_path.exists():
                 continue
-            hot_meta = self.load_meta(run_id)
-            if not isinstance(hot_meta, dict):
+            hot_meta = _read_json_file_safe(hot_meta_path)
+            if not hot_meta:
                 continue
-            try:
-                legacy_meta = json.loads(legacy_meta_path.read_text(encoding="utf-8"))
-            except Exception:
-                legacy_meta = {}
-            if not isinstance(legacy_meta, dict):
-                legacy_meta = {}
+            legacy_meta = _read_json_file_safe(legacy_meta_path)
             if all(hot_meta.get(key) == legacy_meta.get(key) for key in sync_keys):
                 continue
             _atomic_write_text(
@@ -3635,6 +3928,18 @@ class RunStore:
         _atomic_write_text(p["msg"], message)
         _atomic_write_text(p["meta"], meta_text)
         self._mirror_legacy_meta(run_id, meta_text, meta)
+        self._update_live_run_index_entry(run_id, meta)
+        try:
+            _invalidate_project_session_runtime_index_cache(
+                str(meta.get("projectId") or "").strip(),
+                session_id=str(meta.get("sessionId") or "").strip(),
+            )
+        except Exception:
+            pass
+        try:
+            runtime_invalidate_sessions_payload_cache(str(meta.get("projectId") or "").strip())
+        except Exception:
+            pass
         return meta
 
     def load_meta(self, run_id: str) -> Optional[dict[str, Any]]:
@@ -3674,6 +3979,18 @@ class RunStore:
         meta_text = json.dumps(meta, ensure_ascii=False, indent=2)
         _atomic_write_text(p, meta_text)
         self._mirror_legacy_meta(run_id, meta_text, meta)
+        self._update_live_run_index_entry(run_id, meta)
+        try:
+            _invalidate_project_session_runtime_index_cache(
+                str(meta.get("projectId") or "").strip(),
+                session_id=str(meta.get("sessionId") or "").strip(),
+            )
+        except Exception:
+            pass
+        try:
+            runtime_invalidate_sessions_payload_cache(str(meta.get("projectId") or "").strip())
+        except Exception:
+            pass
 
     def read_msg(self, run_id: str, limit_chars: int = 50_000) -> str:
         p = self._paths(run_id)["msg"]
@@ -3710,7 +4027,15 @@ class RunStore:
         def _sync_observability_fields() -> bool:
             changed_local = False
             try:
-                obs = _build_run_observability_fields(self, meta, infer_blocked=False)
+                # Reconcile runs on read/startup paths with lightweight observability only.
+                # Cross-run session semantics are derived in response/runtime views and are
+                # too expensive to recompute for every meta reconciliation.
+                obs = _build_run_observability_fields(
+                    self,
+                    meta,
+                    infer_blocked=False,
+                    include_session_semantics=False,
+                )
             except Exception:
                 return False
             if str(meta.get("status") or "").strip() in {"done", "error"}:
@@ -3725,8 +4050,41 @@ class RunStore:
             return changed_local
 
         st = str(meta.get("status") or "")
+        run_id = str(meta.get("id") or "").strip()
         if st in {"done", "error"}:
-            changed = _sync_observability_fields()
+            changed = False
+            cli_type = str(meta.get("cliType") or "codex").strip() or "codex"
+            if run_id and st == "done":
+                terminal_error = _detect_terminal_text_cli_incomplete_error(
+                    cli_type,
+                    log_path=self._paths(run_id)["log"],
+                )
+                if terminal_error:
+                    meta["status"] = "error"
+                    if str(meta.get("error") or "").strip() != terminal_error:
+                        meta["error"] = terminal_error
+                    meta.pop("errorType", None)
+                    st = "error"
+                    changed = True
+            if run_id and st == "error" and not str(meta.get("error") or "").strip():
+                terminal_error = _detect_terminal_text_cli_incomplete_error(
+                    cli_type,
+                    log_path=self._paths(run_id)["log"],
+                )
+                if terminal_error:
+                    meta["error"] = terminal_error
+                    changed = True
+            elif run_id and st == "error":
+                terminal_error = _detect_terminal_text_cli_incomplete_error(
+                    cli_type,
+                    log_path=self._paths(run_id)["log"],
+                )
+                current_error = str(meta.get("error") or "").strip()
+                if terminal_error and current_error in {"", "permission denied", "permission permission denied"}:
+                    if current_error != terminal_error:
+                        meta["error"] = terminal_error
+                        changed = True
+            changed = _sync_observability_fields() or changed
             return meta, changed
         # queue-related states can legitimately wait.
         # But when a queued run's own process is already alive (e.g. restarted scheduler lost in-memory slot),
@@ -3768,7 +4126,6 @@ class RunStore:
         if st != "running":
             return meta, False
 
-        run_id = str(meta.get("id") or "").strip()
         if not run_id:
             return meta, False
 
@@ -3812,10 +4169,18 @@ class RunStore:
         changed = False
         log_path = self._paths(run_id)["log"]
         last = self.read_last(run_id, limit_chars=8000).strip()
+        terminal_last = runtime_extract_terminal_message_from_file(log_path, cli_type=cli_type).strip()
+        existing_last_preview = str(meta.get("lastPreview") or "").strip()
         agent_msgs = _extract_agent_messages_from_file(log_path, max_items=4, cli_type=cli_type)
         log_has_turn_completed = _log_has_terminal_signal(log_path, signal="turn.completed")
         log_has_turn_failed = _log_has_terminal_signal(log_path, signal="turn.failed")
-        if last or log_has_turn_completed or (agent_msgs and not log_has_turn_failed):
+        if (
+            last
+            or terminal_last
+            or existing_last_preview
+            or log_has_turn_completed
+            or (agent_msgs and not log_has_turn_failed)
+        ):
             if "probeMisses" in meta:
                 try:
                     meta.pop("probeMisses", None)
@@ -3831,7 +4196,7 @@ class RunStore:
             if not str(meta.get("finishedAt") or "").strip():
                 meta["finishedAt"] = _now_iso()
                 changed = True
-            preview_src = last or (agent_msgs[-1] if agent_msgs else "")
+            preview_src = last or terminal_last or existing_last_preview or (agent_msgs[-1] if agent_msgs else "")
             preview = _safe_text(preview_src.replace("\r\n", "\n"), 300)
             if preview != str(meta.get("lastPreview") or ""):
                 meta["lastPreview"] = preview
@@ -3875,6 +4240,86 @@ class RunStore:
             pass
         return meta, changed
 
+    def list_runs_for_sessions(
+        self,
+        *,
+        project_id: str,
+        session_ids: list[str],
+        per_session_limit: int = 24,
+        payload_mode: str = "light",
+    ) -> list[dict[str, Any]]:
+        pid = str(project_id or "").strip()
+        unique_ids = [str(item or "").strip() for item in session_ids if str(item or "").strip()]
+        unique_ids = list(dict.fromkeys(unique_ids))
+        if not pid or not unique_ids:
+            return []
+
+        resolved_payload_mode = str(payload_mode or "").strip().lower()
+        if resolved_payload_mode not in {"", "full", "light", "none"}:
+            resolved_payload_mode = "light"
+        if not resolved_payload_mode:
+            resolved_payload_mode = "light"
+        include_payload = resolved_payload_mode != "none"
+        hydrate_light = resolved_payload_mode in {"full", "light"}
+        hydrate_full = resolved_payload_mode == "full"
+        safe_per_session_limit = max(1, min(int(per_session_limit or 1), 120))
+        wanted = set(unique_ids)
+        counts: dict[str, int] = {sid: 0 for sid in unique_ids}
+        metas: list[dict[str, Any]] = []
+
+        snapshot = self._snapshot_live_run_index()
+        snapshot.sort(key=self._run_sort_key, reverse=True)
+        for meta in snapshot:
+            if bool(meta.get("hidden")):
+                continue
+            run_id = str(meta.get("id") or "").strip()
+            if run_id:
+                meta, changed = self.reconcile_meta(meta)
+                if changed:
+                    self.save_meta(run_id, meta)
+            if pid and str(meta.get("projectId") or "") != pid:
+                continue
+            related_ids = _run_meta_related_session_ids(meta)
+            matched_ids = [sid for sid in related_ids if sid in wanted and counts[sid] < safe_per_session_limit]
+            if not matched_ids:
+                continue
+
+            if include_payload:
+                run_cli_type = str(meta.get("cliType") or "codex").strip() or "codex"
+                if hydrate_light and (hydrate_full or not str(meta.get("messagePreview") or "").strip()):
+                    msg = self.read_msg(run_id, limit_chars=4000)
+                    if msg:
+                        meta["messagePreview"] = _safe_text(msg.replace("\r\n", "\n").strip(), 260)
+                if hydrate_light and (hydrate_full or not str(meta.get("lastPreview") or "").strip()):
+                    last = self.read_last(run_id, limit_chars=2000)
+                    if last:
+                        meta["lastPreview"] = _safe_text(last.replace("\r\n", "\n").strip(), 300)
+                if hydrate_full:
+                    log = self.read_log(run_id, limit_chars=2400)
+                    if not log:
+                        log = _fallback_log_from_meta(meta)
+                    if log:
+                        meta["logPreview"] = _safe_text(log.replace("\r\n", "\n").strip(), 420)
+                        am_preview = _extract_agent_messages(log, max_items=4, cli_type=run_cli_type)
+                        am_file = _extract_agent_messages_from_file(
+                            self._paths(run_id)["log"],
+                            max_items=4,
+                            cli_type=run_cli_type,
+                        )
+                        am = am_file if len(am_file) >= len(am_preview) else am_preview
+                        if am:
+                            prev_count = int(meta.get("agentMessagesCount") or 0)
+                            meta["agentMessagesCount"] = max(prev_count, len(am))
+                        if am and not str(meta.get("lastPreview") or "").strip():
+                            meta["partialPreview"] = _safe_text(am[-1], 300)
+
+            metas.append(meta)
+            for sid in matched_ids:
+                counts[sid] += 1
+            if all(count >= safe_per_session_limit for count in counts.values()):
+                break
+        return metas
+
     def list_runs(
         self,
         channel_id: str = "",
@@ -3900,11 +4345,10 @@ class RunStore:
         before_txt = str(before_created_at or "").strip()
         after_ts = _parse_rfc3339_ts(after_txt) if after_txt else 0.0
         before_ts = _parse_rfc3339_ts(before_txt) if before_txt else 0.0
-        for p in sorted(self._iter_live_meta_paths(), key=lambda x: x.stat().st_mtime, reverse=True):
-            try:
-                meta = json.loads(p.read_text(encoding="utf-8"))
-            except Exception:
-                continue
+
+        snapshot = self._snapshot_live_run_index()
+        snapshot.sort(key=self._run_sort_key, reverse=True)
+        for meta in snapshot:
             if bool(meta.get("hidden")):
                 continue
             run_id = str(meta.get("id") or "").strip()
@@ -3916,7 +4360,7 @@ class RunStore:
                 continue
             if project_id and str(meta.get("projectId") or "") != project_id:
                 continue
-            if session_id and str(meta.get("sessionId") or "") != session_id:
+            if session_id and session_id not in _run_meta_related_session_ids(meta):
                 continue
             if cli_type and str(meta.get("cliType") or "codex") != cli_type:
                 continue
@@ -4061,6 +4505,7 @@ class RunStore:
                 if not src[key].exists():
                     continue
                 src[key].replace(dst[key])
+            self._remove_live_run_index_entry(run_id)
         return results
 
 _RUN_ACTION_AUDIT_LOCK = threading.Lock()
@@ -4474,6 +4919,8 @@ class Handler(BaseHTTPRequestHandler):
             set_project_scheduler_contract_in_config=_set_project_scheduler_contract_in_config,
             set_project_scheduler_enabled_in_config=_set_project_scheduler_enabled_in_config,
             update_project_config_response=update_project_config_response,
+            clear_dashboard_cfg_cache=_clear_dashboard_cfg_cache,
+            invalidate_sessions_payload_cache=runtime_invalidate_sessions_payload_cache,
             load_project_scheduler_contract_config=_load_project_scheduler_contract_config,
             load_project_auto_dispatch_config=_load_project_auto_dispatch_config,
             load_project_heartbeat_config=_load_project_heartbeat_config,
@@ -4619,6 +5066,9 @@ class Handler(BaseHTTPRequestHandler):
                 apply_session_context_rows=runtime_apply_session_context_rows,
                 apply_session_work_context=_apply_session_work_context,
                 attach_runtime_state_to_sessions=_attach_runtime_state_to_sessions,
+                heartbeat_runtime=getattr(self.server, "heartbeat_task_runtime", None),
+                load_session_heartbeat_config=_load_session_heartbeat_config,
+                heartbeat_summary_payload=_heartbeat_summary_payload,
             )
             _json_response(self, code, payload)
             return
@@ -4640,6 +5090,9 @@ class Handler(BaseHTTPRequestHandler):
                     store=store,
                     environment_name=str(getattr(self.server, "environment_name", "stable") or "stable"),
                     worktree_root=getattr(self.server, "worktree_root", _repo_root()),
+                    heartbeat_runtime=getattr(self.server, "heartbeat_task_runtime", None),
+                    load_session_heartbeat_config=_load_session_heartbeat_config,
+                    heartbeat_summary_payload=_heartbeat_summary_payload,
                 )
             _json_response(self, 200, payload)
             return
@@ -4870,6 +5323,9 @@ def main() -> int:
             store=store,
             environment_name=environment_name,
             worktree_root=Path(__file__).resolve().parent,
+            heartbeat_runtime=httpd.heartbeat_task_runtime,
+            load_session_heartbeat_config=_load_session_heartbeat_config,
+            heartbeat_summary_payload=_heartbeat_summary_payload,
         ),
         config_loader=_load_dashboard_cfg_current,
     )

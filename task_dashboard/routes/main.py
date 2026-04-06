@@ -49,6 +49,7 @@ from task_dashboard.runtime.channel_admin import (
     delete_channel as runtime_delete_channel,
     resolve_task_root_path as runtime_resolve_task_root_path,
 )
+from task_dashboard.runtime_identity import build_health_runtime_identity
 from task_dashboard.runtime.project_execution_context import build_project_execution_context
 from task_dashboard.runtime.project_admin import (
     bootstrap_project_response as runtime_bootstrap_project_response,
@@ -264,6 +265,8 @@ class RouteContext:
     set_project_scheduler_contract_in_config: Callable[..., Any] = field(repr=False)
     set_project_scheduler_enabled_in_config: Callable[[str, bool], Any] = field(repr=False)
     update_project_config_response: Callable[..., tuple[int, dict[str, Any]]] = field(repr=False)
+    clear_dashboard_cfg_cache: Callable[[], None] = field(repr=False)
+    invalidate_sessions_payload_cache: Callable[[str], None] = field(repr=False)
     load_project_scheduler_contract_config: Callable[[str], dict[str, Any]] = field(repr=False)
     load_project_auto_dispatch_config: Callable[[str], dict[str, Any]] = field(repr=False)
     load_project_heartbeat_config: Callable[[str], dict[str, Any]] = field(repr=False)
@@ -403,6 +406,10 @@ class RouteDispatcher:
         # /api/cli/types - list available CLI types
         if path == "/api/cli/types":
             self._handle_cli_types_get(handler)
+            return True
+
+        if path == "/api/projects/catalog":
+            self._handle_projects_catalog_get(handler)
             return True
 
         if path == "/api/conversation-memos":
@@ -633,6 +640,7 @@ class RouteDispatcher:
             "/api/codex/runs",
             "/api/communication/audit",
             "/api/cli/types",
+            "/api/projects/catalog",
             "/api/board/global-resource-graph",
             "/api/conversation-memos",
         ]
@@ -659,6 +667,17 @@ class RouteDispatcher:
         project_id = str(getattr(handler.server, "project_id", "") or "").strip()
         runtime_role = str(getattr(handler.server, "runtime_role", "") or "").strip()
         sessions_file = str(getattr(handler.server, "sessions_file", "") or "").strip()
+        runtime_identity = build_health_runtime_identity(
+            project_id=project_id,
+            runtime_role=runtime_role,
+            environment=self.ctx.environment_name,
+            port=self.ctx.server_port,
+            runs_dir=self.ctx.runs_dir,
+            sessions_file=sessions_file,
+            static_root=self.ctx.static_root,
+            worktree_root=self.ctx.worktree_root,
+            config_path=self.ctx.config_toml_path(),
+        )
         server_context = {
             "project_id": project_id,
             "environment": self.ctx.environment_name,
@@ -669,15 +688,8 @@ class RouteDispatcher:
             200,
             {
                 "ok": True,
-                "project_id": project_id,
-                "runtime_role": runtime_role,
+                **runtime_identity,
                 "compat_shell": runtime_role == "compat_shell",
-                "environment": self.ctx.environment_name,
-                "port": self.ctx.server_port,
-                "runsDir": str(self.ctx.runs_dir),
-                "sessionsFile": sessions_file,
-                "staticRoot": str(self.ctx.static_root),
-                "worktreeRoot": str(self.ctx.worktree_root),
                 "project_execution_context": build_project_execution_context(
                     target=server_context,
                     source=server_context,
@@ -791,6 +803,51 @@ class RouteDispatcher:
             handler,
             200,
             {"types": [{"id": t.id, "name": t.name, "enabled": t.enabled} for t in types]},
+        )
+
+    def _handle_projects_catalog_get(self, handler: "BaseHTTPRequestHandler") -> None:
+        """Handle GET /api/projects/catalog."""
+        cfg = self.ctx.load_dashboard_cfg_current()
+        projects_raw = cfg.get("projects") if isinstance(cfg, dict) else []
+        projects: list[dict[str, Any]] = []
+        if isinstance(projects_raw, list):
+            for raw_project in projects_raw:
+                if not isinstance(raw_project, dict):
+                    continue
+                project_id = self.ctx.safe_text(raw_project.get("id"), 160).strip()
+                if not project_id:
+                    continue
+                channels_raw = raw_project.get("channels") if isinstance(raw_project.get("channels"), list) else []
+                channels: list[dict[str, str]] = []
+                for raw_channel in channels_raw:
+                    if not isinstance(raw_channel, dict):
+                        continue
+                    channel_name = self.ctx.safe_text(raw_channel.get("name"), 240).strip()
+                    if not channel_name:
+                        continue
+                    channels.append(
+                        {
+                            "name": channel_name,
+                            "desc": self.ctx.safe_text(raw_channel.get("desc"), 600).strip(),
+                        }
+                    )
+                projects.append(
+                    {
+                        "id": project_id,
+                        "name": self.ctx.safe_text(raw_project.get("name"), 240).strip() or project_id,
+                        "color": self.ctx.safe_text(raw_project.get("color"), 64).strip(),
+                        "description": self.ctx.safe_text(raw_project.get("description"), 1000).strip(),
+                        "channels": channels,
+                    }
+                )
+        self.ctx.json_response(
+            handler,
+            200,
+            {
+                "ok": True,
+                "generated_at": self.ctx.now_iso(),
+                "projects": projects,
+            },
         )
 
     def _handle_config_effective_get(
@@ -1407,6 +1464,9 @@ class RouteDispatcher:
             apply_session_context_rows=self.ctx.apply_session_context_rows,
             apply_session_work_context=self.ctx.apply_session_work_context,
             attach_runtime_state_to_sessions=self.ctx.attach_runtime_state_to_sessions,
+            heartbeat_runtime=self.ctx.heartbeat_runtime,
+            load_session_heartbeat_config=self.ctx.load_session_heartbeat_config,
+            heartbeat_summary_payload=self.ctx.heartbeat_summary_payload,
         )
         if isinstance(payload, dict):
             payload.setdefault("project_id", project_id)
@@ -1431,7 +1491,11 @@ class RouteDispatcher:
             decorate_sessions_display_fields=self.ctx.decorate_sessions_display_fields,
             apply_session_context_rows=self.ctx.apply_session_context_rows,
             apply_session_work_context=self.ctx.apply_session_work_context,
+            attach_runtime_state_to_sessions=self.ctx.attach_runtime_state_to_sessions,
             resolve_channel_primary_session_id=self.ctx.resolve_channel_primary_session_id,
+            heartbeat_runtime=self.ctx.heartbeat_runtime,
+            load_session_heartbeat_config=self.ctx.load_session_heartbeat_config,
+            heartbeat_summary_payload=self.ctx.heartbeat_summary_payload,
         )
         self.ctx.json_response(handler, code, payload)
 
@@ -1450,6 +1514,9 @@ class RouteDispatcher:
             apply_session_context_rows=self.ctx.apply_session_context_rows,
             apply_session_work_context=self.ctx.apply_session_work_context,
             attach_runtime_state_to_sessions=self.ctx.attach_runtime_state_to_sessions,
+            heartbeat_runtime=self.ctx.heartbeat_runtime,
+            load_session_heartbeat_config=self.ctx.load_session_heartbeat_config,
+            heartbeat_summary_payload=self.ctx.heartbeat_summary_payload,
         )
         self.ctx.json_response(handler, code, payload)
 
@@ -1472,7 +1539,14 @@ class RouteDispatcher:
             item = dict(row if isinstance(row, dict) else {})
             item.update(compat_meta)
             session_id = str(item.get("sessionId") or "").strip()
-            session = self.ctx.session_store.get_session(session_id) if session_id else None
+            session = (
+                self.ctx.session_store.get_session(
+                    session_id,
+                    project_id=str(item.get("projectId") or "").strip(),
+                )
+                if session_id
+                else None
+            )
             if isinstance(session, dict):
                 enriched = self.ctx.apply_session_work_context(
                     session,
@@ -1496,7 +1570,14 @@ class RouteDispatcher:
         )
         if code == 200 and isinstance(payload, dict):
             session_id = str(payload.get("sessionId") or "").strip()
-            session = self.ctx.session_store.get_session(session_id) if session_id else None
+            session = (
+                self.ctx.session_store.get_session(
+                    session_id,
+                    project_id=str(payload.get("projectId") or "").strip(),
+                )
+                if session_id
+                else None
+            )
             if isinstance(session, dict):
                 enriched = self.ctx.apply_session_work_context(
                     session,
@@ -2306,6 +2387,8 @@ class RouteDispatcher:
             heartbeat_runtime=self.ctx.heartbeat_runtime,
             store=self.ctx.store,
             default_inspection_targets=self.ctx.default_inspection_targets,
+            clear_dashboard_cfg_cache=self.ctx.clear_dashboard_cfg_cache,
+            invalidate_sessions_payload_cache=self.ctx.invalidate_sessions_payload_cache,
         )
         self.ctx.json_response(handler, code, payload)
 
@@ -2545,13 +2628,17 @@ class RouteDispatcher:
 
         cli_type = ""
         session_data: dict[str, Any] | None = None
+        raw_project_id = self.ctx.safe_text(
+            body.get("projectId") if "projectId" in body else body.get("project_id"),
+            120,
+        ).strip()
         raw_session_id = self.ctx.safe_text(body.get("sessionId"), 80).strip()
         session_id = raw_session_id
         if session_id:
-            session_data = self.ctx.session_store.get_session(session_id)
+            session_data = self.ctx.session_store.get_session(session_id, project_id=raw_project_id)
             if session_data:
                 cli_type = str(session_data.get("cli_type") or "").strip()
-                self.ctx.session_store.touch_session(session_id)
+                self.ctx.session_store.touch_session(session_id, project_id=raw_project_id)
 
         local_host = str(getattr(handler.server, "server_address", ("127.0.0.1", 0))[0] or "")
         parsed_announce = runtime_parse_announce_request(
@@ -2894,7 +2981,13 @@ class RouteDispatcher:
             self.ctx.json_response(handler, 400, {"error": "bad json", "message": str(e), "step": "request_parse"})
             return
         project_id = self.ctx.safe_text(body.get("projectId"), 80).strip()
-        channel_kind = self.ctx.safe_text(body.get("channelKind"), 20).strip()
+        channel_kind_mode = self.ctx.safe_text(body.get("channelKindMode"), 20).strip().lower()
+        channel_kind_raw = self.ctx.safe_text(body.get("channelKind"), 20).strip()
+        channel_kind_custom = self.ctx.safe_text(body.get("channelKindCustom"), 20).strip()
+        if channel_kind_raw == "__custom__":
+            channel_kind_mode = "custom"
+        channel_kind = channel_kind_custom if channel_kind_mode == "custom" else channel_kind_raw
+        channel_kind = self.ctx.safe_text(channel_kind, 20).strip()
         channel_index = self.ctx.safe_text(body.get("channelIndex"), 40).strip()
         channel_name = self.ctx.safe_text(body.get("channelName"), 200).strip()
         task_title = self.ctx.safe_text(body.get("taskTitle"), 300).strip()
@@ -2924,13 +3017,13 @@ class RouteDispatcher:
                 },
             )
             return
-        if channel_kind not in {"子级", "辅助", "主体"}:
+        if any(ch in '/\\:*?"<>|' for ch in channel_kind):
             self.ctx.json_response(
                 handler,
                 400,
                 {
                     "error": "invalid channelKind",
-                    "message": "channelKind must be one of: 子级, 辅助, 主体",
+                    "message": "channelKind contains invalid characters",
                     "step": "request_validate",
                 },
             )
@@ -3111,13 +3204,13 @@ class RouteDispatcher:
                 },
             )
             return
-        if channel_kind not in {"子级", "辅助", "主体"}:
+        if any(ch in '/\\:*?"<>|' for ch in channel_kind):
             self.ctx.json_response(
                 handler,
                 400,
                 {
                     "error": "invalid channelKind",
-                    "message": "channelKind must be one of: 子级, 辅助, 主体",
+                    "message": "channelKind contains invalid characters",
                     "step": "request_validate",
                 },
             )
@@ -3125,7 +3218,7 @@ class RouteDispatcher:
 
         target_session: dict[str, Any] | None = None
         if mode == "agent_assist":
-            resolved_target = self.ctx.session_store.get_session(target_session_id)
+            resolved_target = self.ctx.session_store.get_session(target_session_id, project_id=project_id)
             if not isinstance(resolved_target, dict):
                 self.ctx.json_response(
                     handler,
@@ -3153,9 +3246,11 @@ class RouteDispatcher:
 
         try:
             create_result = self.ctx.create_channel(project_id, channel_name, channel_desc or channel_name, "codex")
+            runtime_clear_dashboard_cfg_cache()
         except ValueError as e:
             message = str(e)
             if "already exists" in message.lower():
+                runtime_clear_dashboard_cfg_cache()
                 self.ctx.json_response(
                     handler,
                     409,
@@ -3163,7 +3258,9 @@ class RouteDispatcher:
                         "error": "channel already exists",
                         "message": message,
                         "step": "create_channel",
+                        "projectId": project_id,
                         "channelName": channel_name,
+                        "channelExistsInProject": bool(self.ctx.project_channel_exists(project_id, channel_name)),
                     },
                 )
                 return
@@ -3327,7 +3424,7 @@ class RouteDispatcher:
             )
             return
 
-        resolved_target = self.ctx.session_store.get_session(target_session_id)
+        resolved_target = self.ctx.session_store.get_session(target_session_id, project_id=project_id)
         if not isinstance(resolved_target, dict):
             self.ctx.json_response(
                 handler,
@@ -3602,6 +3699,7 @@ class RouteDispatcher:
             return
         try:
             result = self.ctx.create_channel(project_id, channel_name, channel_desc, "codex")
+            runtime_clear_dashboard_cfg_cache()
         except Exception as e:
             self.ctx.json_response(handler, 500, {"error": str(e)})
             return

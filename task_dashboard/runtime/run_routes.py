@@ -29,6 +29,20 @@ def _safe_text(value: Any, max_len: int) -> str:
     return text
 
 
+def _latest_process_row_preview(process_rows: Any, max_len: int) -> str:
+    rows = process_rows if isinstance(process_rows, list) else []
+    for row in reversed(rows):
+        if isinstance(row, dict):
+            text = _safe_text(str(row.get("text") or "").replace("\r\n", "\n").strip(), max_len)
+            if text:
+                return text
+        else:
+            text = _safe_text(str(row or "").replace("\r\n", "\n").strip(), max_len)
+            if text:
+                return text
+    return ""
+
+
 _TERMINAL_TEXT_CLIS = {"claude", "opencode"}
 
 
@@ -185,7 +199,14 @@ def list_runs_response(
     for row in runs:
         if not isinstance(row, dict):
             continue
-        row.update(build_run_observability_fields(store, row, infer_blocked=False))
+        row.update(
+            build_run_observability_fields(
+                store,
+                row,
+                infer_blocked=False,
+                include_session_semantics=(payload_mode == "full"),
+            )
+        )
         run_id = str(row.get("id") or "").strip()
         changed = False
         if run_id:
@@ -223,6 +244,14 @@ def get_run_detail_response(
     meta = store.load_meta(run_id)
     if not meta:
         return 404, {"error": "not found"}
+    if hasattr(store, "reconcile_meta"):
+        try:
+            reconciled, changed = store.reconcile_meta(dict(meta))
+            meta = reconciled
+            if changed:
+                store.save_meta(run_id, meta)
+        except Exception:
+            pass
     lazy_resumed = 0
     if lazy_resumed > 0:
         meta = store.load_meta(run_id) or meta
@@ -326,6 +355,30 @@ def get_run_detail_response(
     process_rows = meta.get("processRows") or meta.get("process_rows") or []
     if not isinstance(process_rows, list):
         process_rows = []
+    message_preview = _safe_text(message.replace("\r\n", "\n").strip(), 260) if message else ""
+    if message_preview and message_preview != str(meta.get("messagePreview") or ""):
+        meta["messagePreview"] = message_preview
+        meta_changed = True
+    latest_process_preview = _latest_process_row_preview(process_rows, 300)
+    if partial:
+        partial_preview = _safe_text(partial, 300)
+        if partial_preview and partial_preview != str(meta.get("partialPreview") or ""):
+            meta["partialPreview"] = partial_preview
+            meta_changed = True
+    elif latest_process_preview and latest_process_preview != str(meta.get("partialPreview") or ""):
+        meta["partialPreview"] = latest_process_preview
+        meta_changed = True
+    effective_last_preview = _safe_text(last.replace("\r\n", "\n").strip(), 300) if last else ""
+    if not effective_last_preview:
+        effective_last_preview = latest_process_preview
+    if effective_last_preview and effective_last_preview != str(meta.get("lastPreview") or ""):
+        meta["lastPreview"] = effective_last_preview
+        meta_changed = True
+    if meta_changed:
+        try:
+            store.save_meta(run_id, meta)
+        except Exception:
+            pass
     return 200, {
         "run": meta,
         "message": message,

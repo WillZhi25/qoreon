@@ -48,7 +48,12 @@
       nextChannelKey: 1,
       taskRootTouched: false,
     };
-    const WORKLOG_MANIFEST_PATH = "docs/background/task_dashboard-worklog-index.json";
+    const WORKLOG_MANIFEST_PATH = firstNonEmptyText([
+      DATA && DATA.worklog_manifest_path,
+      DATA && DATA.worklogManifestPath,
+      DATA && DATA.links && DATA.links.worklog_manifest,
+      DATA && DATA.links && DATA.links.worklog_manifest_path,
+    ], "");
 
     function firstNonEmptyText(list, fallback = "") {
       const arr = Array.isArray(list) ? list : [];
@@ -739,6 +744,94 @@
       return "";
     }
 
+    function normalizeOverviewIdentityText(value) {
+      return String(value || "").trim().toLowerCase();
+    }
+
+    function appendOverviewIdentityKey(set, prefix, value) {
+      if (!(set instanceof Set)) return false;
+      const text = normalizeOverviewIdentityText(value);
+      if (!text) return false;
+      set.add(prefix + ":" + text);
+      return true;
+    }
+
+    function collectOverviewAgentIdentityKeys(raw) {
+      const item = (raw && typeof raw === "object") ? raw : {};
+      const keys = new Set();
+      appendOverviewIdentityKey(keys, "sid", firstNonEmptyText([
+        item.session_id,
+        item.sessionId,
+      ], ""));
+      appendOverviewIdentityKey(keys, "aid", firstNonEmptyText([
+        item.agent_id,
+        item.agentId,
+      ], ""));
+      const nameCount = [
+        item.display_name,
+        item.displayName,
+        item.agent_alias,
+        item.alias,
+        item.agent_name,
+        item.agentName,
+        item.name,
+        item.label,
+        getAgentName(item),
+      ].reduce((count, value) => count + (appendOverviewIdentityKey(keys, "name", value) ? 1 : 0), 0);
+      if (!nameCount) {
+        appendOverviewIdentityKey(keys, "channel", firstNonEmptyText([
+          item.channel_display_name,
+          item.channel_name,
+          item.channelName,
+          item.primaryChannel,
+        ], ""));
+      }
+      return keys;
+    }
+
+    function collectOverviewTaskOwnerIdentityKeys(task) {
+      const item = (task && typeof task === "object") ? task : {};
+      const owner = (item.main_owner && typeof item.main_owner === "object")
+        ? item.main_owner
+        : ((item.owner && typeof item.owner === "object")
+          ? item.owner
+          : ((item.next_owner && typeof item.next_owner === "object") ? item.next_owner : null));
+      return collectOverviewAgentIdentityKeys(owner);
+    }
+
+    function buildAgentMainOwnerTaskCounts(tasks, agents) {
+      const taskList = Array.isArray(tasks) ? tasks : [];
+      const agentList = Array.isArray(agents) ? agents : [];
+      const countsByAgent = new Map();
+      const keyToAgents = new Map();
+      agentList.forEach((agent) => {
+        const counts = { todo: 0, in_progress: 0 };
+        countsByAgent.set(agent, counts);
+        collectOverviewAgentIdentityKeys(agent).forEach((key) => {
+          if (!keyToAgents.has(key)) keyToAgents.set(key, []);
+          keyToAgents.get(key).push(agent);
+        });
+      });
+      taskList.forEach((task) => {
+        const statusKey = classifyTaskStatus(task);
+        if (statusKey !== "todo" && statusKey !== "in_progress") return;
+        const ownerKeys = collectOverviewTaskOwnerIdentityKeys(task);
+        if (!ownerKeys.size) return;
+        const matchedAgents = new Set();
+        ownerKeys.forEach((key) => {
+          const list = keyToAgents.get(key);
+          if (!Array.isArray(list)) return;
+          list.forEach((agent) => matchedAgents.add(agent));
+        });
+        matchedAgents.forEach((agent) => {
+          const counts = countsByAgent.get(agent);
+          if (!counts) return;
+          counts[statusKey] += 1;
+        });
+      });
+      return countsByAgent;
+    }
+
     function formatCount(v) {
       return num(v).toLocaleString("zh-CN");
     }
@@ -977,6 +1070,9 @@
     }
 
     async function loadWorklogItems() {
+      if (!WORKLOG_MANIFEST_PATH) {
+        throw new Error("当前版本未配置开发日志索引入口");
+      }
       const data = await fetchJson("/api/fs/read?path=" + encodeURIComponent(WORKLOG_MANIFEST_PATH));
       const item = (data && data.item && typeof data.item === "object") ? data.item : null;
       const content = item && typeof item.content === "string" ? item.content : "";
@@ -1757,10 +1853,10 @@
         ? window.location.origin
         : ((window.location.protocol && window.location.host)
           ? `${window.location.protocol}//${window.location.host}`
-          : "http://127.0.0.1:18765");
+          : "");
       return {
-        primary: new URL("/share/avatar-library.html", origin).toString(),
-        fallback: new URL("/dist/avatar-library.html", origin).toString(),
+        primary: origin ? new URL("/share/avatar-library.html", origin).toString() : "/share/avatar-library.html",
+        fallback: origin ? new URL("/dist/avatar-library.html", origin).toString() : "/dist/avatar-library.html",
       };
     }
 
@@ -3590,6 +3686,10 @@
         const usingMasterSubset = tasks.length < taskCandidates.length;
         const agents = data.nodes.filter(n => n.type === 'agent' && (n.project_id === pid || !n.project_id));
         const runs = data.nodes.filter(n => n.type === 'run' && (n.project_id === pid || !n.project_id));
+        const agentOwnedTaskCounts = buildAgentMainOwnerTaskCounts(taskCandidates, agents);
+        agents.forEach((agent) => {
+            agent._ownedTaskCounts = agentOwnedTaskCounts.get(agent) || { todo: 0, in_progress: 0 };
+        });
         const runById = new Map();
         runs.forEach(r => {
             runById.set(r.id, r);
@@ -3605,16 +3705,26 @@
             .replace(/\\/g, "/")
             .replace(/\.md$/i, "")
             .trim();
+        const normalizeTaskStableId = (value) => String(value || "")
+            .replace(/^task_id::/i, "")
+            .trim();
         const taskLookup = new Map();
+        const taskByStableId = new Map();
         const putTaskLookup = (key, task) => {
             const norm = normalizeTaskLookup(key);
             if (!norm) return;
             taskLookup.set(norm, task);
             taskLookup.set(`task:${norm}`, task);
         };
+        const registerTaskStableId = (task) => {
+            const stableId = normalizeTaskStableId(task && (task.task_id || task.taskId));
+            if (!stableId) return;
+            taskByStableId.set(stableId, task);
+        };
         tasks.forEach((t) => {
             putTaskLookup(t.id, t);
             putTaskLookup(t.path, t);
+            registerTaskStableId(t);
         });
 
         const explicitHierarchy = tasks.some((t) => {
@@ -3675,7 +3785,9 @@
             pendingSubs.forEach(({ task, parentId, parentPath }) => {
                 let parent = null;
                 if (parentId) {
-                    parent = taskLookup.get(normalizeTaskLookup(parentId)) || null;
+                    parent = taskByStableId.get(normalizeTaskStableId(parentId))
+                        || taskLookup.get(normalizeTaskLookup(parentId))
+                        || null;
                 }
                 if (!parent && parentPath) {
                     parent = taskLookup.get(normalizeTaskLookup(parentPath)) || null;
@@ -3785,6 +3897,16 @@
             taskByPath.set(`task:${norm}`, task);
             taskByPath.set(norm.replace(/^.*?\/任务规划\//, "任务规划/"), task);
         };
+        const registerTaskIdentity = (task) => {
+            const stableId = normalizeTaskStableId(task && (task.task_id || task.taskId));
+            if (!stableId) return;
+            taskByStableId.set(stableId, task);
+        };
+        const findTaskByIdentity = (taskIdValue, pathValue) => {
+            const stableId = normalizeTaskStableId(taskIdValue);
+            if (stableId && taskByStableId.has(stableId)) return taskByStableId.get(stableId) || null;
+            return findTaskByPath(pathValue);
+        };
         
         // Layout Main Tasks
         layoutTasks.forEach((t, i) => {
@@ -3800,6 +3922,7 @@
             taskById.set(t.id, t);
             registerTaskPath(t.path, t);
             registerTaskPath(t.id, t);
+            registerTaskIdentity(t);
         });
         
         // Also register subtasks in maps for lookups, but DO NOT push to GRAPH.nodes (so they don't render on board)
@@ -3807,6 +3930,7 @@
             taskById.set(t.id, t);
             registerTaskPath(t.path, t);
             registerTaskPath(t.id, t);
+            registerTaskIdentity(t);
         });
 
         GRAPH.taskStatusOptions = buildTaskStatusOptions(layoutTasks);
@@ -3883,7 +4007,9 @@
             if (e.type !== "agent_run") return;
             const run = runById.get(e.target);
             if (!run) return;
-            let relatedTask = runToTask.get(run.id) || runToTask.get(`run:${run.run_id || ""}`) || findTaskByPath(run.task_path);
+            let relatedTask = runToTask.get(run.id)
+                || runToTask.get(`run:${run.run_id || ""}`)
+                || findTaskByIdentity(run.task_id || run.taskId, run.task_path);
             if (relatedTask && relatedTask._isSubtask && relatedTask._parent) {
                 relatedTask = relatedTask._parent;
             }
@@ -3896,7 +4022,7 @@
         agents.forEach(a => {
             let foundTask = null;
 
-            foundTask = findTaskByPath(a.current_task_path);
+            foundTask = findTaskByIdentity(a.current_task_id || a.currentTaskId, a.current_task_path);
             if (!foundTask && a.current_run_id) {
                 foundTask = runToTask.get(`run:${a.current_run_id}`) || runToTask.get(a.current_run_id) || null;
             }
@@ -3908,7 +4034,7 @@
                 for (const re of runEdges) {
                     const run = runById.get(re.target);
                     if (!run) continue;
-                    const task = runToTask.get(run.id) || findTaskByPath(run.task_path);
+                    const task = runToTask.get(run.id) || findTaskByIdentity(run.task_id || run.taskId, run.task_path);
                     if (!task) continue;
                     const score = runScore(run);
                     if (score > bestScore) {
@@ -4013,7 +4139,7 @@
         });
 
         runs.forEach((r) => {
-            const linkedTask = runToTask.get(r.id) || findTaskByPath(r.task_path);
+            const linkedTask = runToTask.get(r.id) || findTaskByIdentity(r.task_id || r.taskId, r.task_path);
             if (!linkedTask || !taskSupportMap.has(linkedTask.id)) return;
             if (isRunActive(r)) {
                 taskSupportMap.get(linkedTask.id).active_runs += 1;
@@ -4154,6 +4280,63 @@
       if (m) return m[0];
       // Fallback to first char
       return s.substring(0, 1).toUpperCase();
+    }
+
+    function resolveWallAgentOwnedTaskCounts(agent) {
+      const raw = (agent && typeof agent === "object" && agent._ownedTaskCounts && typeof agent._ownedTaskCounts === "object")
+        ? agent._ownedTaskCounts
+        : {};
+      return {
+        todo: Math.max(0, num(raw.todo)),
+        in_progress: Math.max(0, num(raw.in_progress)),
+      };
+    }
+
+    function drawWallTaskGlyph(ctx, x, y, color) {
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.25;
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(-4, -3);
+      ctx.lineTo(4, -3);
+      ctx.moveTo(-4, 0);
+      ctx.lineTo(2.5, 0);
+      ctx.moveTo(-4, 3);
+      ctx.lineTo(1, 3);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    function drawWallAgentOwnedTaskStrip(ctx, centerX, centerY, counts) {
+      const metrics = counts && typeof counts === "object" ? counts : {};
+      const todoText = String(Math.max(0, num(metrics.todo)));
+      const inProgressText = String(Math.max(0, num(metrics.in_progress)));
+      const sepText = "/";
+      ctx.save();
+      ctx.font = "600 11px sans-serif";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      const iconW = 10;
+      const gap = 4;
+      const sepGap = 2;
+      const todoW = ctx.measureText(todoText).width;
+      const sepW = ctx.measureText(sepText).width;
+      const inProgressW = ctx.measureText(inProgressText).width;
+      const totalW = iconW + gap + todoW + sepGap + sepW + sepGap + inProgressW;
+      let x = centerX - totalW / 2;
+      drawWallTaskGlyph(ctx, x + iconW * 0.5, centerY, "rgba(148, 163, 184, 0.84)");
+      x += iconW + gap;
+      ctx.fillStyle = "rgba(100, 116, 139, 0.92)";
+      ctx.fillText(todoText, x, centerY);
+      x += todoW + sepGap;
+      ctx.fillStyle = "rgba(148, 163, 184, 0.72)";
+      ctx.fillText(sepText, x, centerY);
+      x += sepW + sepGap;
+      ctx.fillStyle = "rgba(217, 119, 6, 0.95)";
+      ctx.fillText(inProgressText, x, centerY);
+      ctx.restore();
     }
 
     function renderAgentList(agents) {
@@ -5374,6 +5557,8 @@
                         // Agent Card
                         const a = wn.agent_ref;
                         const isActive = isAgentActive(a);
+                        const showOwnedTaskStrip = GRAPH.leftWallMode !== 'org';
+                        const ownedTaskCounts = resolveWallAgentOwnedTaskCounts(a);
                         
                         ctx.fillStyle = isActive ? "rgba(245, 158, 11, 0.1)" : "rgba(30, 41, 59, 0.8)";
                         ctx.strokeStyle = isActive ? "#f59e0b" : "rgba(148, 163, 184, 0.3)";
@@ -5387,7 +5572,7 @@
                         // Avatar
                         const avatarR = 14;
                         const avatarX = -w/2 + 24;
-                        const avatarY = 0;
+                        const avatarY = showOwnedTaskStrip ? -10 : 0;
                         
                         ctx.beginPath();
                         ctx.arc(avatarX, avatarY, avatarR, 0, Math.PI*2);
@@ -5399,12 +5584,15 @@
                         ctx.textAlign = "center";
                         ctx.textBaseline = "middle";
                         ctx.fillText(getAgentAvatarLabel(wn.label), avatarX, avatarY);
+                        if (showOwnedTaskStrip) {
+                            drawWallAgentOwnedTaskStrip(ctx, avatarX, avatarY + 26, ownedTaskCounts);
+                        }
                         
                         // Text
                         ctx.fillStyle = "#e2e8f0";
                         ctx.font = "14px sans-serif";
                         ctx.textAlign = "left";
-                        ctx.fillText(wn.label, avatarX + 24, -6);
+                        ctx.fillText(wn.label, avatarX + 24, showOwnedTaskStrip ? -10 : -6);
                         
                         ctx.fillStyle = isActive ? "#fcd34d" : "#94a3b8";
                         ctx.font = "11px sans-serif";
@@ -6359,7 +6547,7 @@
         const nodes = [];
         const colCount = 3;
         const cardW = 270;
-        const cardH = 86;
+        const cardH = 92;
         const gapX = 16;
         const gapY = 14;
         const padX = 28;
