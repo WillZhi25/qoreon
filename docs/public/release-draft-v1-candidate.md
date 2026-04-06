@@ -68,6 +68,7 @@ python3 scripts/start_standard_project.py
 
 这是默认完整安装命令。
 它默认保证页面、`standard_project` 和 startup-batch 一次准备好；如果你还要自动建 Agent，会话激活改走显式命令。
+对外默认完成态可理解为：`startup_batch_ready`。
 
 If Codex is ready and you also want the default AI startup batch:
 
@@ -171,7 +172,11 @@ Current packaging direction:
 
 Current public preview baseline:
 
-- repo preview tag: `qoreon-v1-preview-20260322`
+- repo commit: `ed99ad50724d883926068e3d6b340d9a0cfd82f2`
+- repo preview tag: `qoreon-v1-preview-20260407-b`
+- repo candidate tag: `qoreon-v1-candidate-20260407-b`
+- preview package: `qoreon-v1-preview-20260407-b.tar.gz`
+- package sha256: `1600b014055d2a49839c3046fe9c3486d4125a6219946eea478456a4fb1a81ed`
 
 This means:
 

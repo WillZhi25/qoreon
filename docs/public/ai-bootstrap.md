@@ -53,7 +53,7 @@ python3 scripts/start_standard_project.py
 ```
 
 这是默认的完整安装入口。目标不是“只把页面起起来”，而是让 `standard_project`、页面和 startup-batch 在安装完成后一起就位。
-这是默认的可靠安装入口。目标不是“只把页面起起来”，而是让 `standard_project`、页面和 startup-batch 一次准备好，然后由本机 AI 在自己的正常工作上下文里继续接手。
+这是默认的可靠安装入口。目标不是“只把页面起起来”，而是让 `standard_project`、页面和 startup-batch 一次准备好，然后由本机 AI 在自己的正常工作上下文里继续接手。对外默认完成态可理解为：`startup_batch_ready`。
 
 这条命令会做 5 件事：
 
@@ -99,6 +99,8 @@ python3 build_project_task_dashboard.py
 python3 server.py --port 18770 --static-root dist
 python3 scripts/activate_public_example_agents.py --project-id standard_project --base-url http://127.0.0.1:18770
 ```
+
+如果你走的是这条手动激活路径，而不是 `start_standard_project.py --with-agents`，那扩到 12 个通道时应追加的是 `--include-optional`，不是 `--all-channels`。
 
 ## 3. 初始化规则
 

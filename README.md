@@ -185,6 +185,11 @@ python3 scripts/activate_public_example_agents.py --project-id standard_project 
 
 This is an advanced path for local verification. The recommended cross-machine path is still: start the project first, then hand `docs/public/ai-bootstrap.md` and `examples/standard-project/.runtime/demo/startup-batch.md` to the local AI.
 
+For clarity:
+
+- use `--all-channels` only with `python3 scripts/start_standard_project.py --with-agents`
+- keep `--include-optional` on the direct `activate_public_example_agents.py` path
+
 10. Open:
 
 - `http://127.0.0.1:18770/project-task-dashboard.html`
@@ -224,10 +229,15 @@ After startup, the local AI should first read the files and sediment under its o
 
 The current public delivery line is prepared as a GitHub preview release.
 
-- preview tag: `qoreon-v1-preview-20260322`
+- repo commit: `ed99ad50724d883926068e3d6b340d9a0cfd82f2`
+- preview tag: `qoreon-v1-preview-20260407-b`
+- candidate tag: `qoreon-v1-candidate-20260407-b`
+- package: `qoreon-v1-preview-20260407-b.tar.gz`
+- package sha256: `1600b014055d2a49839c3046fe9c3486d4125a6219946eea478456a4fb1a81ed`
 - default project: `standard_project`
 - recommended install: `python3 scripts/start_standard_project.py`
 - fallback behavior: if background Codex session creation is blocked, keep the page install result and hand `startup-batch.md` to the local AI
+- default completion state: `startup_batch_ready`
 - core display assets:
   - `assets/brand/qoreon-logo-primary.png`
   - `assets/screenshots/home-project-list.png`
