@@ -100,7 +100,7 @@ python3 server.py --port 18770 --static-root dist
 python3 scripts/activate_public_example_agents.py --project-id standard_project --base-url http://127.0.0.1:18770
 ```
 
-如果你走的是这条手动激活路径，而不是 `start_standard_project.py --with-agents`，那扩到 12 个通道时应追加的是 `--include-optional`，不是 `--all-channels`。
+如果你走的是这条手动激活路径，而不是 `start_standard_project.py --with-agents`，扩到 12 个通道时也统一追加 `--all-channels`；旧的 `--include-optional` 仅作为兼容参数保留。
 
 ## 3. 初始化规则
 

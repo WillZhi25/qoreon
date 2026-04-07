@@ -187,8 +187,8 @@ This is an advanced path for local verification. The recommended cross-machine p
 
 For clarity:
 
-- use `--all-channels` only with `python3 scripts/start_standard_project.py --with-agents`
-- keep `--include-optional` on the direct `activate_public_example_agents.py` path
+- use `--all-channels` when you explicitly want the full 12-channel activation attempt
+- the legacy `--include-optional` flag remains compatible on `activate_public_example_agents.py`, but public docs now converge to `--all-channels`
 
 10. Open:
 
