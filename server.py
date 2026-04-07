@@ -3394,6 +3394,53 @@ def _find_new_session_id(
     return "", ""
 
 
+def _extract_session_id_from_cli_output(
+    adapter_cls: Any,
+    *chunks: Any,
+    exclude_session_ids: Optional[set[str]] = None,
+) -> str:
+    extractor = getattr(adapter_cls, "extract_session_id_from_output", None)
+    if not callable(extractor):
+        return ""
+    combined_output = "\n".join(str(part or "") for part in chunks if str(part or "").strip())
+    if not combined_output:
+        return ""
+    try:
+        sid = str(extractor(combined_output) or "").strip().lower()
+    except Exception:
+        return ""
+    if not sid:
+        return ""
+    blocked = {
+        str(row or "").strip().lower()
+        for row in (exclude_session_ids or set())
+        if str(row or "").strip()
+    }
+    if sid in blocked:
+        return ""
+    return sid
+
+
+def _find_session_path_by_id(
+    adapter_cls: Any,
+    session_id: str,
+    *,
+    after_ts: float = 0.0,
+) -> str:
+    target = str(session_id or "").strip().lower()
+    if not target:
+        return ""
+    try:
+        sessions = adapter_cls.scan_sessions(after_ts=after_ts)
+    except Exception:
+        sessions = []
+    for info in sessions:
+        sid = str(getattr(info, "session_id", "") or "").strip().lower()
+        if sid == target:
+            return str(getattr(info, "path", "") or "")
+    return ""
+
+
 def create_codex_session(seed_prompt: str, timeout_s: int = 90) -> dict[str, Any]:
     """
     Create a new Codex session by running a minimal `codex exec` turn (read-only sandbox)
@@ -3476,11 +3523,22 @@ def create_cli_session(
             env=spawn_env,
         )
     except subprocess.TimeoutExpired as e:
-        sid, spath = _find_new_session_id(
-            start_ts,
-            cli_type,
+        sid = _extract_session_id_from_cli_output(
+            adapter_cls,
+            getattr(e, "stdout", ""),
+            getattr(e, "stderr", ""),
+            getattr(e, "output", ""),
             exclude_session_ids=existing_session_ids,
         )
+        spath = _find_session_path_by_id(adapter_cls, sid, after_ts=start_ts) if sid else ""
+        if sid and not spath:
+            spath = _find_session_path_by_id(adapter_cls, sid, after_ts=0.0)
+        if not sid:
+            sid, spath = _find_new_session_id(
+                start_ts,
+                cli_type,
+                exclude_session_ids=existing_session_ids,
+            )
         return {
             "ok": False,
             "error": "timeout",
@@ -3507,16 +3565,17 @@ def create_cli_session(
         cli_type,
         exclude_session_ids=existing_session_ids,
     )
-    if not sid and proc.returncode == 0:
-        combined_output = "\n".join(part for part in [proc.stdout, proc.stderr] if part)
-        try:
-            extractor = getattr(adapter_cls, "extract_session_id_from_output", None)
-            if callable(extractor):
-                sid = str(extractor(combined_output) or "").strip().lower()
-                if sid in existing_session_ids:
-                    sid = ""
-        except Exception:
-            sid = ""
+    if not sid:
+        sid = _extract_session_id_from_cli_output(
+            adapter_cls,
+            proc.stdout,
+            proc.stderr,
+            exclude_session_ids=existing_session_ids,
+        )
+        if sid and not spath:
+            spath = _find_session_path_by_id(adapter_cls, sid, after_ts=start_ts)
+        if sid and not spath:
+            spath = _find_session_path_by_id(adapter_cls, sid, after_ts=0.0)
     if proc.returncode != 0:
         err = (proc.stderr or "").strip() or (proc.stdout or "").strip()
         return {

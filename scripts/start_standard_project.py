@@ -13,6 +13,13 @@ if str(REPO_ROOT) not in sys.path:
 from task_dashboard.public_install import install_public_bundle
 
 
+def _coerce_count(value: object) -> int:
+    try:
+        return max(0, int(value or 0))
+    except Exception:
+        return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Recommended install/start entrypoint for the public Qoreon bundle on a new computer."
@@ -51,9 +58,24 @@ def main() -> int:
         poll_interval_s=2.0,
     )
     batches = result.get("startup_batches") if isinstance(result.get("startup_batches"), list) else []
-    result["agent_startup_mode"] = "activated" if activate_agents else "startup_batch_ready"
+    activation = result.get("activation") if isinstance(result.get("activation"), dict) else {}
+    activation_counts = activation.get("counts") if isinstance(activation.get("counts"), dict) else {}
+    target_session_count = _coerce_count(batches[0].get("session_count") if batches else 0)
+    created_session_count = _coerce_count(activation_counts.get("sessions"))
+    result["agent_startup_mode"] = (
+        str(result.get("agent_activation_state") or "").strip() or ("activated" if activate_agents else "startup_batch_ready")
+    )
     result["agent_session_scope"] = "all_channels" if include_optional else "core_channels"
     result["agent_startup_batch"] = batches[0] if batches else {}
+    result["agent_startup_summary"] = {
+        "requested": activate_agents,
+        "scope": result["agent_session_scope"],
+        "target_sessions": target_session_count,
+        "created_sessions": created_session_count,
+        "missing_sessions": max(0, target_session_count - created_session_count),
+        "run_sample_actions": activate_agents,
+        "state": result["agent_startup_mode"],
+    }
     sys.stdout.write(json.dumps(result, ensure_ascii=False, indent=2) + "\n")
     return 0
 

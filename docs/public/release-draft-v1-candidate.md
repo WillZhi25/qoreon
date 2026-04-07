@@ -172,11 +172,11 @@ Current packaging direction:
 
 Current public preview baseline:
 
-- repo commit: `ed99ad50724d883926068e3d6b340d9a0cfd82f2`
-- repo preview tag: `qoreon-v1-preview-20260407-b`
-- repo candidate tag: `qoreon-v1-candidate-20260407-b`
-- preview package: `qoreon-v1-preview-20260407-b.tar.gz`
-- package sha256: `1600b014055d2a49839c3046fe9c3486d4125a6219946eea478456a4fb1a81ed`
+- repo commit: `see tag qoreon-v1-preview-20260407-c`
+- repo preview tag: `qoreon-v1-preview-20260407-c`
+- repo candidate tag: `qoreon-v1-candidate-20260407-c`
+- preview package: `qoreon-v1-preview-20260407-c.tar.gz`
+- package sha256: see the `qoreon-v1-preview-20260407-c` release asset checksum
 
 This means:
 
