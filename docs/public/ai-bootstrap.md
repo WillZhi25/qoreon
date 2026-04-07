@@ -34,8 +34,10 @@
 4. `docs/onboarding/project-worksplit-playbook.md`
 5. `examples/standard-project/README.md`
 6. `examples/standard-project/seed/seed-inventory.json`
-7. `examples/standard-project/tasks/辅助05-团队协作Skills治理/产出物/沉淀/03-公开公共技能包清单.md`
-8. `examples/standard-project/skills/INDEX.md`
+7. `examples/standard-project/seed/skills-manifest.json`
+8. `examples/standard-project/skills/README.md`
+9. `examples/standard-project/skills/INDEX.md`
+10. `examples/standard-project/tasks/辅助05-团队协作Skills治理/产出物/沉淀/03-公开公共技能包清单.md`
 
 进入某个通道开始工作前，再补读：
 
@@ -109,6 +111,8 @@ python3 scripts/activate_public_example_agents.py --project-id standard_project 
 - 把 `agents_seed.json` 视为 Agent 初始化真源
 - 把 `tasks_seed.json` 视为首批任务真源
 - 把 `skills-manifest.json` 视为技能装配真源
+- 把 `skills/README.md` 视为公开技能包总入口
+- 把 `skills/INDEX.md` 视为目录和推荐阅读顺序
 - 把 `03-公开公共技能包清单.md` 视为技能使用顺序说明
 - 把 `docs/onboarding/project-worksplit-playbook.md` 视为推荐结构解释真源
 - 角色边界不要去找 role skill，直接从自己负责通道的目录和通讯录中学习

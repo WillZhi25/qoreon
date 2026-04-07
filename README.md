@@ -214,6 +214,9 @@ The key files are:
 - `docs/public/ai-bootstrap.md`
 - `docs/public/quick-start.md`
 - `examples/standard-project/README.md`
+- `examples/standard-project/seed/skills-manifest.json`
+- `examples/standard-project/skills/README.md`
+- `examples/standard-project/skills/INDEX.md`
 - `examples/standard-project/seed/ccr_roster_seed.json`
 - `examples/standard-project/tasks/辅助05-团队协作Skills治理/产出物/沉淀/03-公开公共技能包清单.md`
 - `examples/standard-project/tasks/主体-总控/产出物/沉淀/02-标准项目启动顺序.md`

@@ -28,7 +28,8 @@
 5. `tasks/主体-总控/产出物/沉淀/02-标准项目启动顺序.md`
 6. `tasks/主体-总控/产出物/沉淀/01-治理通道来源映射.md`
 7. `tasks/辅助05-团队协作Skills治理/产出物/沉淀/03-公开公共技能包清单.md`
-8. `skills/INDEX.md`
+8. `skills/README.md`
+9. `skills/INDEX.md`
 
 ## 当前状态
 
@@ -58,11 +59,25 @@
   这里只放公共 skill：对应启动、培训、协作、会话健康、轮换和任务健康
 - 角色职责不做 role skill，统一从 `tasks/`、`ccr_roster_seed.json` 和通讯录/分工表中学习
 
+## 公开技能入口
+
+- `README.md`
+  说明项目入口、推荐启动顺序和技能包在项目中的位置。
+- `skills/README.md`
+  公共技能包总入口，解释 manifest / README / INDEX / 单个 SKILL.md 各自负责什么。
+- `skills/INDEX.md`
+  说明默认启用哪些公共 skill、推荐加载顺序和公开安全边界。
+- `skills/<skill>/SKILL.md`
+  说明单个 skill 的用途、触发场景、门禁、输出和边界。
+
+公开版只保留方法抽象，不公开真实 `session_id`、`run_id`、私有 `.runtime/.sessions/.runs` 或内部固定端口。
+
 推荐先读：
 
 1. `tasks/辅助05-团队协作Skills治理/产出物/沉淀/03-公开公共技能包清单.md`
 2. `seed/skills-manifest.json`
-3. `skills/INDEX.md`
+3. `skills/README.md`
+4. `skills/INDEX.md`
 
 ## 推荐用途
 

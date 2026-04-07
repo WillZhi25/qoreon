@@ -110,6 +110,9 @@ python3 scripts/activate_public_example_agents.py --project-id standard_project 
 - `docs/onboarding/project-worksplit-playbook.md`
 - `examples/standard-project/README.md`
 - `examples/standard-project/seed/seed-inventory.json`
+- `examples/standard-project/seed/skills-manifest.json`
+- `examples/standard-project/skills/README.md`
+- `examples/standard-project/skills/INDEX.md`
 - `examples/standard-project/.runtime/demo/startup-batch.md`
 - `examples/standard-project/tasks/辅助05-团队协作Skills治理/产出物/沉淀/03-公开公共技能包清单.md`
 - 它自己负责通道下的 `任务/`、`反馈/`、`产出物/材料/`、`产出物/沉淀/`
@@ -122,3 +125,14 @@ python3 scripts/activate_public_example_agents.py --project-id standard_project 
 
 - 8 个公共 skill：告诉 AI 怎么做启动、培训、协作、巡检和轮换
 - 各通道负责什么，不靠 role skill，而是靠通道目录、通讯录和知识沉淀
+
+技能包入口链统一为：
+
+- `seed/skills-manifest.json`
+  机器读真源
+- `skills/README.md`
+  公开总入口
+- `skills/INDEX.md`
+  目录与推荐顺序
+- `skills/<skill>/SKILL.md`
+  单个 skill 的详细规则
