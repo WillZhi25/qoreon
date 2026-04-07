@@ -76,7 +76,7 @@ If Codex is ready and you also want the default AI startup batch:
 python3 scripts/start_standard_project.py --with-agents
 ```
 
-Add `--all-channels` if you explicitly want the full 12-channel activation attempt.
+Add `--all-channels` if you explicitly want the full 12-channel activation attempt. Public docs now converge on `--all-channels` as the canonical 12-channel flag, while the manual activation script still accepts legacy `--include-optional` for compatibility.
 
 Then open:
 

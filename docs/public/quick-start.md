@@ -85,12 +85,12 @@ python3 server.py --port 18770 --static-root dist
 python3 scripts/activate_public_example_agents.py --project-id standard_project --base-url http://127.0.0.1:18770
 ```
 
-如果你的电脑还没有可用的 `codex` 环境，先不要执行第 4 步；只完成前 3 步，页面和标准项目也可以正常打开。等 `codex` 环境就绪后，再补第 4 步把 6 个核心通道会话建出来；若明确需要 12 个通道，再给第 4 步追加 `--all-channels`。
+如果你的电脑还没有可用的 `codex` 环境，先不要执行第 4 步；只完成前 3 步，页面和标准项目也可以正常打开。等 `codex` 环境就绪后，再补第 4 步把 6 个核心通道会话建出来；若明确需要 12 个通道，再给第 4 步追加 `--all-channels`。如果你沿旧说明操作，`--include-optional` 也仍会被脚本接受，但公开文档统一改写为 `--all-channels`。
 
 注意区分两条路径：
 
 - `python3 scripts/start_standard_project.py --with-agents` 这条默认安装路径，扩到 12 个通道用 `--all-channels`
-- `python3 scripts/activate_public_example_agents.py ...` 这条手动激活路径，扩到 12 个通道也统一用 `--all-channels`
+- `python3 scripts/activate_public_example_agents.py ...` 这条手动激活路径，公开文档也统一写 `--all-channels`；脚本仍兼容 legacy `--include-optional`
 
 ## 4. 打开页面
 
