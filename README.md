@@ -10,6 +10,7 @@
   <p>
     <a href="#中文">中文</a> ·
     <a href="#english">English</a> ·
+    <a href="https://qoreon.cn">Website</a> ·
     <a href="docs/public/quick-start.md">Quick Start</a> ·
     <a href="docs/public/ai-bootstrap.md">Docs</a>
   </p>
@@ -178,10 +179,11 @@ python3 -m unittest discover -s tests -p 'test_public_*.py' -v
 建议按以下顺序继续：
 
 1. `docs/public/quick-start.md`
-2. `docs/public/ai-bootstrap.md`
-3. `docs/public/architecture.md`
-4. `examples/standard-project/README.md`
-5. `examples/standard-project/tasks/主体-总控/产出物/沉淀/02-标准项目启动顺序.md`
+2. `https://qoreon.cn`
+3. `docs/public/ai-bootstrap.md`
+4. `docs/public/architecture.md`
+5. `examples/standard-project/README.md`
+6. `examples/standard-project/tasks/主体-总控/产出物/沉淀/02-标准项目启动顺序.md`
 
 ## English
 
@@ -315,10 +317,11 @@ python3 -m unittest discover -s tests -p 'test_public_*.py' -v
 Recommended reading order:
 
 1. `docs/public/quick-start.md`
-2. `docs/public/ai-bootstrap.md`
-3. `docs/public/architecture.md`
-4. `examples/standard-project/README.md`
-5. `examples/standard-project/tasks/主体-总控/产出物/沉淀/02-标准项目启动顺序.md`
+2. `https://qoreon.cn`
+3. `docs/public/ai-bootstrap.md`
+4. `docs/public/architecture.md`
+5. `examples/standard-project/README.md`
+6. `examples/standard-project/tasks/主体-总控/产出物/沉淀/02-标准项目启动顺序.md`
 
 ## License
 
