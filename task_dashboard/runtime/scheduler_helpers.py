@@ -2494,10 +2494,12 @@ def _is_compatible_project_binding(requested_project_id: str, bound_project_id: 
     bound = str(bound_project_id or "").strip()
     if not requested or not bound:
         return False
-    if requested == bound:
+    requested_key = requested.casefold()
+    bound_key = bound.casefold()
+    if requested_key == bound_key:
         return True
     compat_group = {"task_dashboard", "task_dashboard_prod", "task_dashboard_prod_mirror"}
-    return requested in compat_group and bound in compat_group
+    return requested_key in compat_group and bound_key in compat_group
 
 
 def _validate_announce_session_binding(
@@ -3213,11 +3215,16 @@ def _build_project_scheduler_status(
         project_id,
     )
     pid = str(project_id or "").strip()
-    if not cfg.get("project_exists"):
-        return {}
-
     runtime_disk = _load_project_scheduler_runtime_snapshot(store, pid)
     runtime = runtime_flags if isinstance(runtime_flags, dict) else {}
+    if not cfg.get("project_exists"):
+        if not runtime and not runtime_disk:
+            return {}
+        cfg = {
+            "project_exists": True,
+            "scheduler": {"enabled": False, "errors": []},
+            "reminder": {"enabled": False, "errors": []},
+        }
     scheduler_cfg = cfg.get("scheduler") if isinstance(cfg.get("scheduler"), dict) else {}
     reminder_cfg = cfg.get("reminder") if isinstance(cfg.get("reminder"), dict) else {}
     auto_dispatch_cfg = _call_server_override(
@@ -3258,9 +3265,19 @@ def _build_project_scheduler_status(
         "auto_dispatch_enabled": auto_dispatch_enabled,
         "auto_inspection_enabled": auto_inspection_enabled,
     }
+    auto_inspection_ready_raw = auto_inspection_cfg.get("ready")
+    auto_inspection_ready = (
+        bool(auto_inspection_ready_raw)
+        if isinstance(auto_inspection_ready_raw, bool)
+        else bool(
+            auto_inspection_enabled
+            and str(auto_inspection_cfg.get("channel_name") or "").strip()
+            and str(auto_inspection_cfg.get("session_id") or "").strip()
+        )
+    )
     auto_inspection_state = "disabled"
     if auto_inspection_enabled:
-        auto_inspection_state = "idle" if bool(auto_inspection_cfg.get("ready")) else "invalid_config"
+        auto_inspection_state = "idle" if auto_inspection_ready else "invalid_config"
     runtime_auto_inspection_state = str(
         runtime.get("auto_inspection_state") or runtime_disk.get("auto_inspection_state") or ""
     ).strip()
@@ -3311,7 +3328,7 @@ def _build_project_scheduler_status(
         status["auto_inspection_interval_minutes"] = int(auto_inspection_cfg.get("interval_minutes") or 0)
     if auto_inspection_cfg.get("prompt_template"):
         status["auto_inspection_prompt_template"] = str(auto_inspection_cfg.get("prompt_template") or "")
-    status["auto_inspection_ready"] = bool(auto_inspection_cfg.get("ready"))
+    status["auto_inspection_ready"] = auto_inspection_ready
     for k in (
         "auto_inspection_last_tick_at",
         "auto_inspection_last_run_id",
