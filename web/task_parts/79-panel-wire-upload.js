@@ -978,7 +978,7 @@
         const ok = await apiHealth();
         if (!ok) {
           stopCCBPoll();
-          hint.textContent = "CCB API 未启用：请用 run_local.sh 启动看板服务（需要同源 API 才能发消息/回看回复）。";
+          hint.textContent = "CCB API 未启用：请启动本地开发服务（需要同源 API 才能发消息/回看回复）。";
           sendBtn.disabled = true;
           refreshBtn.disabled = true;
           renderRuns([]);

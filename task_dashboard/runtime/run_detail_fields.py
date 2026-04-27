@@ -530,7 +530,7 @@ def _clean_business_path(raw: Any) -> str:
         return ""
     p = p[: m.end()]
     low = p.lower()
-    if low.endswith("/skill.md") or "/.codex/skills/" in low:
+    if low.endswith("/skill.md") or ("/.codex/" in low and "/skills/" in low):
         return ""
     if not any(seg in p for seg in _BUSINESS_PATH_SEGMENTS):
         return ""

@@ -4597,7 +4597,7 @@ def _apply_plan_first_to_message(message: Any, run_extra_meta: Any) -> tuple[str
                 f"{raw_message}\n\n"
                 f"{_TASK_WITH_RECEIPT_GUARD_MARKER}\n"
                 "- 本轮结论只允许基于当前回执任务与当前消息主线；历史错线 run 只能排除，不能当成本主线结果。\n"
-                "- 禁止轮询当前执行 run 自己的 `.runtime/.runs/*.json/.last.txt/.log.txt` 来判断“是否已完成”。\n"
+                "- 禁止轮询当前执行 run 自己的 runtime log files 来判断“是否已完成”。\n"
                 "- 若当前 run 仍在执行，禁止把“本 run 仍在 running / 等待本 run 完成 / 等待当前 run 落盘”写成最终回执。\n"
                 "- 若证据不足，请直接回单一阻塞，不要用自引用中间态补位。"
             )

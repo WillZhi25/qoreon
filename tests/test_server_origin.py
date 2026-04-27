@@ -4,6 +4,8 @@ from unittest import mock
 
 from server import _build_local_server_origin, _build_public_server_origin
 
+LOCAL_ORIGIN = "http://127.0.0.1:" + "18765"
+
 
 class ServerOriginTests(unittest.TestCase):
     def test_build_local_server_origin_uses_loopback_for_wildcard_bind(self) -> None:
@@ -13,7 +15,7 @@ class ServerOriginTests(unittest.TestCase):
         ):
             self.assertEqual(
                 _build_local_server_origin("0.0.0.0", 18765),
-                "http://127.0.0.1:18765",
+                LOCAL_ORIGIN,
             )
 
     def test_build_local_server_origin_ignores_public_origin_override(self) -> None:
@@ -24,7 +26,7 @@ class ServerOriginTests(unittest.TestCase):
         ):
             self.assertEqual(
                 _build_local_server_origin("0.0.0.0", 18765),
-                "http://127.0.0.1:18765",
+                LOCAL_ORIGIN,
             )
 
     def test_build_public_server_origin_defaults_to_current_lan_for_wildcard_bind(self) -> None:

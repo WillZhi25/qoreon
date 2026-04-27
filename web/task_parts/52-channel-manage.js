@@ -128,7 +128,7 @@
       ));
       menu.appendChild(buildChannelManageMenuItem(
         "删除通道",
-        "删除通道目录与配套文件夹，保留 .runtime/.runs 历史",
+        "删除通道目录与配套文件夹，保留运行历史记录",
         () => openChannelDeleteModal(projectId, channelName),
         true,
       ));

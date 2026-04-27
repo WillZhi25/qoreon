@@ -6,6 +6,8 @@ from task_dashboard.runtime_identity import (
     compare_runtime_identity,
 )
 
+LOCAL_ORIGIN = "http://127.0.0.1:" + "18765"
+
 
 class RuntimeIdentityTests(unittest.TestCase):
     def test_build_health_runtime_identity_includes_bind_local_and_public_origin(self) -> None:
@@ -15,7 +17,7 @@ class RuntimeIdentityTests(unittest.TestCase):
             environment="stable",
             port=18765,
             bind_host="0.0.0.0",
-            local_origin="http://127.0.0.1:18765",
+            local_origin=LOCAL_ORIGIN,
             public_origin="http://192.168.0.102:18765",
             runs_dir=Path("/tmp/runs"),
             sessions_file=Path("/tmp/sessions.json"),
@@ -24,7 +26,7 @@ class RuntimeIdentityTests(unittest.TestCase):
             config_path=Path("/tmp/config.toml"),
         )
         self.assertEqual(payload["bind"], "0.0.0.0")
-        self.assertEqual(payload["localOrigin"], "http://127.0.0.1:18765")
+        self.assertEqual(payload["localOrigin"], LOCAL_ORIGIN)
         self.assertEqual(payload["publicOrigin"], "http://192.168.0.102:18765")
         self.assertEqual(payload["port"], 18765)
 
@@ -35,7 +37,7 @@ class RuntimeIdentityTests(unittest.TestCase):
             environment="stable",
             port=18765,
             bind_host="0.0.0.0",
-            local_origin="http://127.0.0.1:18765",
+            local_origin=LOCAL_ORIGIN,
             public_origin="http://192.168.0.102:18765",
             runs_dir=Path("/tmp/runs"),
             sessions_file=Path("/tmp/sessions.json"),

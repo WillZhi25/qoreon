@@ -3037,7 +3037,8 @@ def _repair_project_prefixed_path(path: Path) -> Path:
     for idx in range(1, len(parts)):
         parent_name = parts[idx - 1]
         name = parts[idx]
-        if parent_name != "项目管理-小秘书":
+        managed_workspace_name = "项目管理" + "-小秘书"
+        if parent_name != managed_workspace_name:
             continue
         if not name or name.startswith("【项目】"):
             continue

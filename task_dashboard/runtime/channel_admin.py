@@ -192,7 +192,7 @@ def delete_channel(
 
     Notes:
     - Only the channel directory under task_root_rel is removed.
-    - Runtime run history under .runtime/.runs is intentionally kept.
+    - Runtime history records are intentionally kept.
     """
     if not config_path.exists():
         raise ValueError("config.toml not found")

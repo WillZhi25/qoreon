@@ -54,7 +54,7 @@
           value: "project_privileged_full",
           tone: "warn",
           optionLabel: "project_privileged_full · 完全放开（当前用户态）",
-          summary: "后续新发起的 CCB 执行会按当前用户态直接放开，不再继续按目录补权限，默认覆盖项目、Codex 会话、Service Hub、LaunchAgents 和本机管理动作。",
+          summary: "后续新发起的 CCB 执行会按当前用户态直接放开，不再继续按目录补权限，默认覆盖项目、Codex 会话、本地服务集成和本机管理动作。",
           effect: "适合你要直接开干的场景；选中后新 run 不再走细碎权限补救，但不会回头改变已在运行的会话。",
         };
       }
